@@ -1,0 +1,329 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  PATIENT
+  DOCTOR
+  FACILITY_ADMIN
+  PLATFORM_ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum AccessType {
+  NORMAL_CONSENT
+  EMERGENCY_BREAK_GLASS
+  PRE_SHARED_LINK
+  SYSTEM_ADMIN
+}
+
+enum BreakGlassReason {
+  UNCONSCIOUS
+  LIFE_THREATENING
+  PATIENT_UNABLE_TO_CONSENT
+  OTHER
+}
+
+enum BloodGroup {
+  A_POSITIVE
+  A_NEGATIVE
+  B_POSITIVE
+  B_NEGATIVE
+  AB_POSITIVE
+  AB_NEGATIVE
+  O_POSITIVE
+  O_NEGATIVE
+  UNKNOWN
+}
+
+enum Genotype {
+  AA
+  AS
+  SS
+  AC
+  SC
+  UNKNOWN
+}
+
+enum FHIRResourceType {
+  Patient
+  Encounter
+  Condition
+  Observation
+  DiagnosticReport
+  Procedure
+  MedicationRequest
+  MedicationStatement
+  AllergyIntolerance
+  Immunization
+  DocumentReference
+}
+
+model User {
+  id                String         @id @default(uuid())
+  email             String?        @unique
+  phone             String?        @unique
+  passwordHash      String         // Argon2id / secure scrypt hash
+  role              UserRole
+  twoFactorSecret   String?        // Encrypted TOTP secret
+  twoFactorEnabled  Boolean        @default(false)
+  countryCode       String         @default("NG") // ISO 3166-1 alpha-2
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  patient           Patient?
+  clinician         Clinician?
+  facilityAdmin     FacilityAdmin?
+  auditLogs         AuditLog[]     @relation("ActorAuditLogs")
+  sessions          Session[]
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique
+  ipAddress    String
+  userAgent    String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+}
+
+model Facility {
+  id              String             @id @default(uuid())
+  name            String
+  registrationNo  String             @unique // State MOH / CAC
+  facilityType    String             // Hospital, Clinic, Diagnostic Centre
+  address         String
+  city            String
+  state           String
+  countryCode     String             @default("NG")
+  phone           String
+  email           String
+  status          VerificationStatus @default(PENDING)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  clinicians      ClinicianFacility[]
+  admins          FacilityAdmin[]
+  authoredRecords PatientRecord[]
+  emergencyGrants EmergencyAccessGrant[]
+  consentGrants   ConsentGrant[]
+}
+
+model Clinician {
+  id              String             @id @default(uuid())
+  userId          String             @unique
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName        String
+  licenseNumber   String             @unique // MDCN Folio number
+  specialty       String
+  status          VerificationStatus @default(PENDING)
+  verifiedAt      DateTime?
+  verifiedBy      String?            // Admin ID
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  facilities      ClinicianFacility[]
+  authoredRecords PatientRecord[]
+  emergencyGrants EmergencyAccessGrant[] @relation("TreatingClinician")
+  coSignedGrants  EmergencyAccessGrant[] @relation("CoSigningClinician")
+}
+
+model ClinicianFacility {
+  id          String    @id @default(uuid())
+  clinicianId String
+  clinician   Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  facilityId  String
+  facility    Facility  @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  isPrimary   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@unique([clinicianId, facilityId])
+}
+
+model FacilityAdmin {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  facilityId String
+  facility   Facility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model Patient {
+  id                   String       @id @default(uuid())
+  userId               String       @unique
+  user                 User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Encrypted demographic fields (AES-256-GCM)
+  encryptedFirstName   String
+  encryptedLastName    String
+  encryptedDob         String       // ISO Date
+  gender               String       // male, female, other
+  encryptedNin         String?      // National Identification Number (encrypted)
+  photoUrl             String?
+
+  // Critical Medical Triage (Emergency Core)
+  bloodGroup           BloodGroup   @default(UNKNOWN)
+  genotype             Genotype     @default(UNKNOWN)
+  advanceDirectiveDnr  Boolean      @default(false)
+  organDonor           Boolean      @default(false)
+  publicEmergencyOptIn Boolean      @default(false) // Opt-in to show blood group/allergies without login
+
+  countryCode          String       @default("NG")
+  primaryFacilityId    String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  emergencyCodes       EmergencyCode[]
+  emergencyContacts    EmergencyContact[]
+  records              PatientRecord[]
+  consentGrants        ConsentGrant[]
+  emergencyGrants      EmergencyAccessGrant[]
+  auditLogs            AuditLog[]   @relation("SubjectAuditLogs")
+}
+
+model EmergencyCode {
+  id               String    @id @default(uuid())
+  patientId        String
+  patient          Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  codeHash         String    @unique // SHA256 of Crockford Base32 code for constant-time lookup
+  displayCode      String    // Masked representation (e.g. K7QM-****-****-8W)
+  isActive         Boolean   @default(true)
+  revokedAt        DateTime?
+  revocationReason String?
+  reissuedFromId   String?
+  createdAt        DateTime  @default(now())
+
+  emergencyGrants  EmergencyAccessGrant[]
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  name         String
+  relationship String
+  phone        String
+  email        String?
+  priority     Int      @default(1)
+  createdAt    DateTime @default(now())
+}
+
+model PatientRecord {
+  id                String           @id @default(uuid())
+  patientId         String
+  patient           Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  resourceType      FHIRResourceType
+  versionId         Int              @default(1)
+  isLatest          Boolean          @default(true)
+  previousVersionId String?
+
+  // Origin & Federation
+  authorClinicianId String
+  authorClinician   Clinician        @relation(fields: [authorClinicianId], references: [id])
+  originFacilityId  String
+  originFacility    Facility         @relation(fields: [originFacilityId], references: [id])
+  countryCode       String           @default("NG")
+
+  // FHIR R4 Encrypted Payload & Indices
+  clinicalCategory  String?          // e.g., 'vital-signs', 'laboratory', 'drug-allergy'
+  effectiveDate     DateTime         @default(now())
+  encryptedPayload  String           // AES-256-GCM encrypted JSON payload
+  payloadSignature  String           // Clinician digital signature/hash
+
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([patientId, resourceType, isLatest])
+  @@index([patientId, effectiveDate])
+}
+
+model ConsentGrant {
+  id                String    @id @default(uuid())
+  patientId         String
+  patient           Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  targetFacilityId  String?
+  targetFacility    Facility? @relation(fields: [targetFacilityId], references: [id])
+  targetClinicianId String?
+  scopes            String[]  // ['all'] or ['Condition', 'MedicationStatement', etc.]
+  validFrom         DateTime  @default(now())
+  validUntil        DateTime
+  isRevoked         Boolean   @default(false)
+  revokedAt         DateTime?
+  oneTimePasscode   String?   // Hashed OTP for SMS verification
+  createdAt         DateTime  @default(now())
+
+  @@index([patientId, isRevoked, validUntil])
+}
+
+model EmergencyAccessGrant {
+  id                String           @id @default(uuid())
+  emergencyCodeId   String
+  emergencyCode     EmergencyCode    @relation(fields: [emergencyCodeId], references: [id])
+  patientId         String
+  patient           Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicianId       String
+  clinician         Clinician        @relation("TreatingClinician", fields: [clinicianId], references: [id])
+  facilityId        String
+  facility          Facility         @relation(fields: [facilityId], references: [id])
+  
+  reason            BreakGlassReason
+  reasonDetails     String?
+  grantedAt         DateTime         @default(now())
+  expiresAt         DateTime         // grantedAt + 60 minutes
+  fullHistoryAccess Boolean          @default(false)
+  coSignClinicianId String?
+  coSignClinician   Clinician?       @relation("CoSigningClinician", fields: [coSignClinicianId], references: [id])
+  coSignReason      String?
+
+  notificationSent  Boolean          @default(false)
+  isDisputed        Boolean          @default(false)
+  disputeReason     String?
+  disputedAt        DateTime?
+
+  createdAt         DateTime         @default(now())
+
+  @@index([patientId, expiresAt])
+}
+
+model AuditLog {
+  id            String     @id @default(uuid())
+  sequenceNumber BigInt    @unique @default(autoincrement())
+  timestamp     DateTime   @default(now())
+  actorId       String?
+  actor         User?      @relation("ActorAuditLogs", fields: [actorId], references: [id])
+  subjectId     String?
+  subject       Patient?   @relation("SubjectAuditLogs", fields: [subjectId], references: [id])
+  
+  action        String     // e.g. "EMERGENCY_SCAN", "RECORD_READ", "CONSENT_REVOKE"
+  accessType    AccessType
+  resourceType  String?
+  resourceId    String?
+  facilityId    String?
+  countryCode   String     @default("NG")
+
+  ipAddress     String
+  userAgent     String
+  reason        String?
+
+  // Tamper Evidence (Hash Chain)
+  previousHash  String
+  currentHash   String     // SHA256(sequenceNumber + timestamp + actorId + subjectId + action + previousHash)
+
+  @@index([subjectId, timestamp])
+  @@index([actorId, timestamp])
+}
+
