@@ -50,6 +50,23 @@
 
 ---
 
+## 🌐 Website Pages & Demo Flows
+
+`npm start` serves the full site on http://localhost:3000 (no Docker needed; data is synthetic and in memory).
+
+| Page | What it does |
+|---|---|
+| `/` , `/about`, `/features`, `/how-it-works` | Product, principles, compliance and the break-glass flow |
+| `/patients` | Patient portal: timeline, access log + disputes, consent approve/reject/revoke, emergency kit (wallet card, wristband, reissue code, public badge), alerts |
+| `/clinicians` | Clinician console: TOTP sign-in, safe lookup, consent request by one-time code, record view, break-glass sessions, dual co-sign and full history |
+| `/emergency`, `/e/:code` | Emergency code entry and the break-glass gateway |
+| `/facilities` | Facilities and their MDCN-verified clinicians |
+| `/contact` | Contact form, stored in `data/contact-messages.jsonl` |
+
+Demo notes: there is no patient login (pick a synthetic patient on the page). Clinician sign-in uses real TOTP verification, and the "Show the current demo code" button is disabled when `NODE_ENV=production`. Pages live in `site/` (`layout.html` + `pages/`), APIs in `src/lib/site/portalApi.ts`.
+
+---
+
 ## 🚀 Quickstart & Local Development
 
 ### 1. Prerequisites

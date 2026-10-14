@@ -1,0 +1,50 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Contact</div>
+        <h1 class="page-title">Talk to the Medistry Team</h1>
+        <p class="page-lead">Hospitals, clinics and clinicians: ask about onboarding, integration with your records system, or a walkthrough of the emergency break-glass flow.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container two-col">
+        <div class="panel">
+          <h2 class="panel-title">Send a message</h2>
+          <form id="contact-form" class="stack-form" novalidate>
+            <div class="form-row-2">
+              <div class="form-group"><label for="ct-name">Full name</label><input id="ct-name" type="text" required maxlength="120" autocomplete="name" placeholder="e.g. Chinedu Okafor"></div>
+              <div class="form-group"><label for="ct-email">Email</label><input id="ct-email" type="email" required maxlength="160" autocomplete="email" placeholder="you@example.com"></div>
+            </div>
+            <div class="form-row-2">
+              <div class="form-group"><label for="ct-role">I am a</label>
+                <select id="ct-role" required>
+                  <option value="" disabled selected>Select your role</option>
+                  <option>Patient or family member</option>
+                  <option>Clinician</option>
+                  <option>Hospital or clinic</option>
+                  <option>Regulator or partner</option>
+                </select></div>
+              <div class="form-group"><label for="ct-facility">Facility (optional)</label><input id="ct-facility" type="text" maxlength="160" placeholder="e.g. Lagos University Teaching Hospital"></div>
+            </div>
+            <div class="form-group"><label for="ct-message">Message</label><textarea id="ct-message" rows="6" required maxlength="4000" placeholder="What would you like to know about Medistry?"></textarea></div>
+            <p class="form-error" id="ct-error" role="alert" hidden></p>
+            <button type="submit" class="btn btn-pill-primary" id="ct-submit"><span>Send message</span></button>
+          </form>
+          <div class="success-box" id="ct-success" role="status" hidden>
+            <h3>Thank you, your message was received.</h3>
+            <p>Reference <strong id="ct-ref"></strong>. We will reply to the email address you gave.</p>
+            <button type="button" class="btn btn-secondary-pill" id="ct-again"><span>Send another</span></button>
+          </div>
+        </div>
+
+        <div class="panel panel-soft">
+          <h2 class="panel-title">Other ways in</h2>
+          <ul class="contact-list">
+            <li><span class="contact-label">Email</span><a href="mailto:hello@medistry.health">hello@medistry.health</a></li>
+            <li><span class="contact-label">Region</span>Nigeria (single-region deployment)</li>
+            <li><span class="contact-label">Try it</span><a href="/demo">Open the emergency scan demo</a></li>
+            <li><span class="contact-label">Status</span><a href="/status">Platform health</a></li>
+          </ul>
+        </div>
+      </div>
+    </section>

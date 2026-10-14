@@ -14,7 +14,7 @@ import { AuditChainManager } from './lib/audit/hashChain.ts';
 import { ClinicalDataStore } from './lib/clinical/store.ts';
 import { ClinicalTimelineEngine } from './lib/clinical/timeline.ts';
 import { NotificationDispatcher, ConsoleNotificationProvider } from './lib/notifications/dispatcher.ts';
-import { EmergencyBreakGlassEngine, type BreakGlassReason } from './lib/emergency/breakGlassEngine.ts';
+import { EmergencyBreakGlassEngine } from './lib/emergency/breakGlassEngine.ts';
 import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { generateWalletCardSvg, generateWristbandSvg } from './lib/code/deliverables.ts';
@@ -22,7 +22,9 @@ import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
 import { PatientAccessLogManager } from './lib/audit/accessLogManager.ts';
 import { decryptPatientDemographics, type PatientEntity } from './lib/patient/profile.ts';
-import type { ActorContext } from './lib/policy/enforcer.ts';
+import { seedClinicalRecords } from './lib/site/seedClinical.ts';
+import { createPortalApi } from './lib/site/portalApi.ts';
+import { normalizePatientCode } from './lib/code/crockford.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,19 +40,96 @@ const consoleProvider = new ConsoleNotificationProvider();
 const dispatcher = new NotificationDispatcher(consoleProvider);
 const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
 const offlineCardManager = new OfflineEmergencyCardManager();
-const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 });
+const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 const consentManager = new ConsentLifecycleManager(auditManager);
 const accessLogManager = new PatientAccessLogManager(auditManager);
 
-// Index patients by ID and by emergency code
+// Index patients by ID and by emergency code (raw and formatted)
 const patientsById = new Map<string, PatientEntity>();
 const patientsByCode = new Map<string, PatientEntity>();
+const codeByPatient = new Map<string, { rawCode: string; formattedCode: string }>();
 
 for (const entry of seedData.patients) {
   patientsById.set(entry.patient.id, entry.patient);
   patientsByCode.set(entry.emergencyCode.rawCode, entry.patient);
   patientsByCode.set(entry.emergencyCode.formattedCode, entry.patient);
+  codeByPatient.set(entry.patient.id, {
+    rawCode: entry.emergencyCode.rawCode,
+    formattedCode: entry.emergencyCode.formattedCode,
+  });
 }
+
+// Resolve provenance names and seed synthetic FHIR records for the timelines
+for (const f of seedData.facilities) {
+  timelineEngine.registerFacility(f.id, f.name);
+  accessLogManager.registerFacility(f.id, f.name);
+}
+for (const c of seedData.clinicians) {
+  timelineEngine.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
+  timelineEngine.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
+  accessLogManager.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
+  accessLogManager.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
+}
+seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities);
+
+const SITE_DIR = path.join(ROOT_DIR, 'site');
+const handlePortalApi = createPortalApi({
+  seedData,
+  patientsById,
+  patientsByCode,
+  codeByPatient,
+  auditManager,
+  clinicalStore,
+  timelineEngine,
+  consentManager,
+  accessLogManager,
+  emergencyEngine,
+  notifications: consoleProvider,
+  dataDir: path.join(ROOT_DIR, 'data'),
+});
+
+// Site pages: shared layout + one template per page
+const PAGES: Record<string, { file: string; nav: string; title: string; description: string; script?: string }> = {
+  '/': { file: 'home', nav: 'home', title: 'Medistry | Portable Medical Records & Emergency Access', description: 'Medistry gives patients control of their FHIR-based medical records and lets verified clinicians reach life-saving information through an audited emergency break-glass scan.' },
+  '/about': { file: 'about', nav: 'about', title: 'About | Medistry', description: 'Why Medistry exists, the principles behind it, and how it aligns with the Nigeria Data Protection Act 2023.' },
+  '/features': { file: 'features', nav: 'features', title: 'Features | Medistry', description: 'Patient-controlled records, verified clinician access, emergency QR and NFC codes, encryption and a tamper-evident audit log.', script: 'features' },
+  '/how-it-works': { file: 'how-it-works', nav: 'how', title: 'How It Works | Medistry', description: 'From a random emergency code to a read-only, 60-minute break-glass grant, step by step.' },
+  '/emergency': { file: 'emergency', nav: 'emergency', title: 'Emergency Access | Medistry', description: 'Scan or enter a patient emergency code to start the clinician break-glass process.', script: 'emergency' },
+  '/patients': { file: 'patients', nav: 'patients', title: 'Patient Portal | Medistry', description: 'View your record timeline, approve or revoke access, see who accessed your record, and manage your emergency code.', script: 'patients' },
+  '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians' },
+  '/facilities': { file: 'facilities', nav: 'facilities', title: 'Facilities | Medistry', description: 'Accredited facilities and verified clinicians on Medistry.', script: 'facilities' },
+  '/status': { file: 'status', nav: '', title: 'Platform Status | Medistry', description: 'Live health of this Medistry environment.', script: 'status' },
+  '/contact': { file: 'contact', nav: 'contact', title: 'Contact | Medistry', description: 'Talk to the Medistry team about onboarding, integration or a walkthrough.', script: 'contact' },
+};
+
+const NAV_KEYS = ['home', 'about', 'features', 'how', 'patients', 'clinicians', 'emergency', 'facilities', 'contact'];
+
+function renderPage(page: { file: string; nav: string; title: string; description: string; script?: string }, extra: Record<string, string> = {}): string | null {
+  try {
+    let html = fs.readFileSync(path.join(SITE_DIR, 'layout.html'), 'utf-8');
+    const content = fs.readFileSync(path.join(SITE_DIR, 'pages', `${page.file}.html`), 'utf-8');
+    html = html
+      .replace('{{content}}', () => content)
+      .replace(/\{\{title\}\}/g, () => page.title.replace(/&/g, '&amp;'))
+      .replace(/\{\{description\}\}/g, () => page.description.replace(/"/g, '&quot;'))
+      .replace('{{pageScript}}', () => (page.script ? `<script src="/js/${page.script}.js" defer></script>` : ''));
+    for (const key of NAV_KEYS) {
+      html = html.replace(new RegExp(`\\{\\{active_${key}\\}\\}`, 'g'), page.nav === key ? 'active' : '');
+    }
+    for (const [k, v] of Object.entries(extra)) html = html.split(`{{${k}}}`).join(v);
+    return html;
+  } catch {
+    return null;
+  }
+}
+
+const STATIC_TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -131,19 +210,34 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // Static Routes
-    if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-      serveStaticFile(res, path.join(ROOT_DIR, 'index.html'), 'text/html; charset=utf-8');
+    // Static assets (css, js, svg) from /site, with path traversal protection
+    if (method === 'GET' && /^\/(css|js|assets)\/[A-Za-z0-9._-]+$/.test(pathname)) {
+      const ext = path.extname(pathname);
+      if (STATIC_TYPES[ext]) {
+        serveStaticFile(res, path.join(SITE_DIR, pathname), STATIC_TYPES[ext]);
+        return;
+      }
+    }
+
+    // Site pages
+    if (method === 'GET' && PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]) {
+      const html = renderPage(PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]);
+      if (html) {
+        sendHtml(res, 200, html);
+        return;
+      }
+    }
+
+    // Demo shortcut: the priority patient's emergency gate (code is generated at startup)
+    if (method === 'GET' && pathname === '/demo') {
+      const demoCode = codeByPatient.get(seedData.patients[0].patient.id)?.formattedCode || seedData.patients[0].emergencyCode.formattedCode;
+      res.writeHead(302, { Location: `/e/${demoCode}` });
+      res.end();
       return;
     }
-    if (method === 'GET' && pathname === '/styles.css') {
-      serveStaticFile(res, path.join(ROOT_DIR, 'styles.css'), 'text/css');
-      return;
-    }
-    if (method === 'GET' && pathname === '/app.js') {
-      serveStaticFile(res, path.join(ROOT_DIR, 'app.js'), 'application/javascript');
-      return;
-    }
+
+    // JSON API for the patient portal, clinician console, emergency gate and contact form
+    if (await handlePortalApi(req, res, urlObj)) return;
 
     // Health Check
     if (method === 'GET' && pathname === '/api/health') {
@@ -198,225 +292,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // EMERGENCY GATE: /e/:code
+    // EMERGENCY GATE: /e/:code (the page loads the gate state from /api/emergency/gate/:code)
     if (method === 'GET' && pathname.startsWith('/e/')) {
-      const rawCode = pathname.replace('/e/', '').trim().toUpperCase();
-      const patient = patientsByCode.get(rawCode);
-
-      if (!patient) {
-        sendHtml(
-          res,
-          404,
-          `<div style="font-family:sans-serif; text-align:center; padding:40px;">
-            <h1 style="color:#b91c1c;">404 - Emergency Code Not Found</h1>
-            <p>The scanned emergency code is invalid or has been revoked by the patient.</p>
-            <a href="/" style="color:#2563eb;">Return to Hospital Portal</a>
-          </div>`
-        );
-        return;
-      }
-
-      // Check if patient opted into public badge without doctor login
-      const gate = emergencyEngine.evaluatePublicScanGate(patient);
-      if (!gate.requiresLogin && gate.publicCard) {
-        sendHtml(
-          res,
-          200,
-          `<!DOCTYPE html>
-          <html>
-          <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>PUBLIC EMERGENCY BADGE — MEDISTRY</title>
-            <style>
-              body { font-family: -apple-system, sans-serif; background:#f8fafc; padding:20px; color:#0f172a; }
-              .card { max-width:500px; margin:0 auto; background:#fff; border-radius:12px; border:2px solid #dc2626; padding:20px; box-shadow:0 4px 6px rgba(0,0,0,0.1); }
-              .badge-head { background:#fee2e2; color:#991b1b; padding:8px 12px; border-radius:6px; font-weight:bold; margin-bottom:16px; text-align:center; }
-              .stat { display:flex; justify-content:space-between; margin-bottom:12px; border-bottom:1px solid #e2e8f0; padding-bottom:8px; }
-              .val { font-size:20px; font-weight:800; color:#b91c1c; }
-              .btn-login { display:block; text-align:center; background:#1e293b; color:#fff; padding:12px; border-radius:6px; text-decoration:none; font-weight:bold; margin-top:20px; }
-            </style>
-          </head>
-          <body>
-            <div class="card">
-              <div class="badge-head">🚨 PUBLIC EMERGENCY TRIAGE CARD (PATIENT OPT-IN)</div>
-              <div class="stat"><span>Blood Group & Rh:</span> <span class="val">${gate.publicCard.bloodGroup}</span></div>
-              <div class="stat"><span>Genotype:</span> <span class="val" style="color:#0f172a;">${gate.publicCard.genotype}</span></div>
-              <div style="margin-bottom:12px;">
-                <strong>Critical Allergies:</strong>
-                <ul style="margin-top:6px; color:#b91c1c;">${gate.publicCard.allergies.map((a) => `<li>${a}</li>`).join('')}</ul>
-              </div>
-              <div style="margin-bottom:16px;">
-                <strong>Emergency Contact Hotline:</strong>
-                <div style="font-size:18px; font-weight:bold; margin-top:4px;"><a href="tel:${gate.publicCard.emergencyHotline}" style="color:#15803d; text-decoration:none;">📞 ${gate.publicCard.emergencyHotline}</a></div>
-              </div>
-              <p style="font-size:12px; color:#64748b;">Notice: Minimal triage data shown per patient consent. To access medications, clinical encounters, or medical directives, attending clinicians must log in.</p>
-              <a href="/e/${rawCode}?mode=clinician" class="btn-login">👨‍⚕️ Clinician Break-Glass Gateway</a>
-            </div>
-          </body>
-          </html>`
-        );
-        return;
-      }
-
-      // Default: Clinician Break-Glass Login & Reason Selection Screen
-      sendHtml(
-        res,
-        200,
-        `<!DOCTYPE html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>CLINICIAN EMERGENCY BREAK-GLASS — MEDISTRY</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f1f5f9; padding:20px; color:#0f172a; }
-            .container { max-width:550px; margin:0 auto; background:#ffffff; border-radius:12px; border:2px solid #b91c1c; padding:24px; box-shadow:0 8px 16px rgba(0,0,0,0.1); }
-            .header-stripe { background:#7f1d1d; color:#fff; margin:-24px -24px 20px -24px; padding:16px 24px; border-radius:10px 10px 0 0; }
-            .header-stripe h2 { font-size:18px; margin:0; }
-            .badge-code { background:#fee2e2; color:#991b1b; padding:6px 12px; border-radius:6px; font-family:monospace; font-size:16px; font-weight:bold; display:inline-block; margin-bottom:16px; }
-            .form-group { margin-bottom:16px; }
-            label { display:block; font-weight:bold; font-size:13px; margin-bottom:6px; color:#334155; }
-            select, input, textarea { width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:14px; box-sizing:border-box; }
-            .alert-box { background:#fffbeb; border:1px solid #fef3c7; color:#92400e; padding:12px; border-radius:6px; font-size:12px; margin-bottom:16px; line-height:1.5; }
-            .btn-break { background:#dc2626; color:#fff; width:100%; border:none; padding:14px; font-size:16px; font-weight:bold; border-radius:6px; cursor:pointer; }
-            .btn-break:hover { background:#b91c1c; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header-stripe">
-              <h2>🛡️ HOSPITAL EMERGENCY BREAK-GLASS GATEWAY</h2>
-              <p style="font-size:12px; margin:4px 0 0 0; opacity:0.9;">Verified Attending Clinician Access Only • NDPA 2023 Regulated</p>
-            </div>
-            
-            <div class="badge-code">PATIENT CODE: ${rawCode}</div>
-
-            <div class="alert-box">
-              <strong>⚠️ LEGAL & AUDIT NOTICE:</strong>
-              Executing an emergency break-glass grants immediate, time-boxed (60-minute) read-only access to critical triage attributes. Every access appends an immutable entry to the cryptographic audit ledger and triggers instant SMS/push notifications to the patient and their emergency contacts.
-            </div>
-
-            <form id="breakGlassForm">
-              <input type="hidden" name="code" value="${rawCode}">
-              
-              <div class="form-group">
-                <label for="clinicianSelect">Select Attending Clinician (Verified MDCN Doctor):</label>
-                <select id="clinicianSelect" name="clinicianId" required>
-                  ${seedData.clinicians.map((c) => `<option value="${c.id}" data-name="${c.fullName}" data-fac="${c.facilityId}">${c.fullName} (${c.licenseNumber}) — ${c.specialty}</option>`).join('')}
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label for="reasonSelect">Emergency Clinical Indication:</label>
-                <select id="reasonSelect" name="reason" required onchange="toggleReasonDetails(this.value)">
-                  <option value="UNCONSCIOUS">Patient is unconscious / comatose</option>
-                  <option value="LIFE_THREATENING">Life-threatening trauma / shock state</option>
-                  <option value="PATIENT_UNABLE_TO_CONSENT">Patient incapacitated / unable to communicate</option>
-                  <option value="OTHER">Other acute clinical emergency (Requires documentation)</option>
-                </select>
-              </div>
-
-              <div class="form-group" id="reasonDetailsGroup" style="display:none;">
-                <label for="reasonDetails">Clinical Justification (Mandatory):</label>
-                <textarea id="reasonDetails" name="reasonDetails" rows="2" placeholder="Describe the acute resuscitation indication..."></textarea>
-              </div>
-
-              <div class="form-group">
-                <label for="totp">MDCN Clinician TOTP 2FA Token:</label>
-                <input type="text" id="totp" name="totp" value="123456" placeholder="Enter 6-digit authenticator code" required>
-              </div>
-
-              <button type="submit" class="btn-break">🚨 CONFIRM BREAK-GLASS & VIEW SUMMARY</button>
-            </form>
-          </div>
-
-          <script>
-            function toggleReasonDetails(val) {
-              document.getElementById('reasonDetailsGroup').style.display = (val === 'OTHER') ? 'block' : 'none';
-            }
-
-            document.getElementById('breakGlassForm').addEventListener('submit', async (e) => {
-              e.preventDefault();
-              const sel = document.getElementById('clinicianSelect');
-              const opt = sel.options[sel.selectedIndex];
-              const clinicianId = sel.value;
-              const doctorName = opt.getAttribute('data-name');
-              const facilityId = opt.getAttribute('data-fac');
-              const reason = document.getElementById('reasonSelect').value;
-              const reasonDetails = document.getElementById('reasonDetails').value;
-              const code = '${rawCode}';
-
-              try {
-                const res = await fetch('/api/emergency/break-glass', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    code,
-                    clinicianId,
-                    doctorName,
-                    facilityId,
-                    reason,
-                    reasonDetails
-                  })
-                });
-                const data = await res.json();
-                if (data.redirectUrl) {
-                  window.location.href = data.redirectUrl;
-                } else {
-                  alert(data.error || 'Failed to initiate break glass');
-                }
-              } catch (err) {
-                alert('Connection error: ' + err.message);
-              }
-            });
-          </script>
-        </body>
-        </html>`
+      const code = decodeURIComponent(pathname.slice(3)).trim();
+      const patient = patientsByCode.get(normalizePatientCode(code));
+      const html = renderPage(
+        { file: 'emergency-gate', nav: 'emergency', title: 'Emergency Gate | Medistry', description: 'Clinician emergency break-glass gateway.', script: 'gate' }
       );
-      return;
-    }
-
-    // POST /api/emergency/break-glass
-    if (method === 'POST' && pathname === '/api/emergency/break-glass') {
-      const body = await parseJsonBody(req);
-      const { code, clinicianId, doctorName, facilityId, reason, reasonDetails } = body;
-
-      const patient = patientsByCode.get((code || '').toUpperCase());
-      if (!patient) {
-        sendJson(res, 404, { error: 'Patient emergency code not found' });
+      if (html) {
+        sendHtml(res, patient ? 200 : 404, html);
         return;
       }
-
-      const clinician = seedData.clinicians.find((c) => c.id === clinicianId) || seedData.clinicians[0];
-      const facility = seedData.facilities.find((f) => f.id === facilityId) || seedData.facilities[0];
-
-      const actor: ActorContext = {
-        userId: clinician.userId,
-        role: 'DOCTOR',
-        clinicianId: clinician.id,
-        isVerifiedClinician: true,
-      };
-
-      try {
-        const { grant } = await emergencyEngine.initiateBreakGlass({
-          patient,
-          emergencyCode: code,
-          actor,
-          treatingDoctorName: doctorName || clinician.fullName,
-          facilityId: facility.id,
-          facilityName: facility.name,
-          reason: (reason as BreakGlassReason) || 'UNCONSCIOUS',
-          reasonDetails,
-        });
-
-        sendJson(res, 200, {
-          success: true,
-          grantId: grant.id,
-          redirectUrl: `/emergency/summary?grant=${grant.id}`,
-        });
-      } catch (err: any) {
-        sendJson(res, 400, { error: err.message });
-      }
-      return;
     }
 
     // GET /emergency/summary?grant=:grantId
@@ -445,26 +331,6 @@ const server = http.createServer(async (req, res) => {
         sendHtml(res, 200, html);
       } catch (err: any) {
         sendHtml(res, 400, `<h1>Error generating emergency summary: ${err.message}</h1>`);
-      }
-      return;
-    }
-
-    // POST /api/emergency/cosign
-    if (method === 'POST' && pathname === '/api/emergency/cosign') {
-      const body = await parseJsonBody(req);
-      const { grantId, primaryClinicianId, coSignClinicianId, coSignDoctorName, coSignReason } = body;
-
-      try {
-        const updatedGrant = emergencyEngine.coSignForFullHistory({
-          grantId,
-          primaryClinicianId,
-          coSignClinicianId,
-          coSignDoctorName,
-          coSignReason,
-        });
-        sendJson(res, 200, { success: true, grant: updatedGrant });
-      } catch (err: any) {
-        sendJson(res, 400, { error: err.message });
       }
       return;
     }
@@ -538,31 +404,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // API: Multi-Facility Timeline
-    if (method === 'GET' && pathname === '/api/timeline') {
-      const patientId = urlObj.searchParams.get('patientId');
-      if (!patientId) {
-        sendJson(res, 400, { error: 'patientId query parameter required' });
+    // Fallback 404: friendly page for browsers, JSON for API clients
+    if (method === 'GET' && !pathname.startsWith('/api/')) {
+      const html = renderPage({ file: '404', nav: '', title: 'Page Not Found | Medistry', description: 'Page not found.' });
+      if (html) {
+        sendHtml(res, 404, html);
         return;
       }
-      const timeline = timelineEngine.getPatientTimeline(patientId);
-      sendJson(res, 200, { timeline });
-      return;
     }
-
-    // API: Access Log ("Who accessed my record")
-    if (method === 'GET' && pathname === '/api/audit/logs') {
-      const patientId = urlObj.searchParams.get('patientId');
-      if (!patientId) {
-        sendJson(res, 400, { error: 'patientId query parameter required' });
-        return;
-      }
-      const logs = accessLogManager.getPatientAccessAuditLog(patientId);
-      sendJson(res, 200, { logs });
-      return;
-    }
-
-    // Fallback 404
     sendJson(res, 404, { error: 'Route not found', path: pathname });
   } catch (err: any) {
     console.error('Unhandled Server Error:', err);

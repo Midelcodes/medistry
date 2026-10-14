@@ -1,0 +1,91 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Patient Portal</div>
+        <h1 class="page-title">Your Record, Your Rules</h1>
+        <p class="page-lead">See your timeline, approve or revoke access, check who opened your record, and manage your emergency code.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container">
+        <div class="demo-banner">
+          <strong>Demo environment.</strong> There is no patient sign-in here. Pick one of the synthetic patients to explore their portal.
+        </div>
+
+        <div class="panel picker-panel">
+          <label for="patient-picker">Viewing as</label>
+          <select id="patient-picker" aria-label="Choose a synthetic patient"></select>
+          <span class="chain-chip" id="chain-chip" title="Result of verifying the audit hash chain">Checking audit chain&hellip;</span>
+        </div>
+
+        <div id="portal" hidden>
+          <div class="tabs" role="tablist" aria-label="Patient portal sections">
+            <button class="tab active" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+            <button class="tab" role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
+            <button class="tab" role="tab" data-tab="access" aria-selected="false">Who accessed my record</button>
+            <button class="tab" role="tab" data-tab="consent" aria-selected="false">Consent <span class="tab-count" id="consent-count" hidden></span></button>
+            <button class="tab" role="tab" data-tab="kit" aria-selected="false">Emergency kit</button>
+            <button class="tab" role="tab" data-tab="alerts" aria-selected="false">Alerts</button>
+          </div>
+
+          <div class="tab-panel" id="tab-overview" role="tabpanel"></div>
+
+          <div class="tab-panel" id="tab-timeline" role="tabpanel" hidden>
+            <div class="toolbar">
+              <div class="form-group inline"><label for="tl-type">Type</label>
+                <select id="tl-type">
+                  <option value="">All types</option>
+                  <option>Condition</option><option>Encounter</option><option>Observation</option>
+                  <option>AllergyIntolerance</option><option>MedicationStatement</option>
+                </select></div>
+              <div class="form-group inline"><label for="tl-facility">Hospital</label>
+                <select id="tl-facility"><option value="">All hospitals</option></select></div>
+            </div>
+            <ol class="timeline" id="timeline-list"></ol>
+          </div>
+
+          <div class="tab-panel" id="tab-access" role="tabpanel" hidden>
+            <p class="panel-sub">Every read, write and emergency access to your record. If something looks wrong, dispute it and Medistry will review it.</p>
+            <div class="table-wrap"><table class="data-table" id="access-table">
+              <thead><tr><th>When</th><th>Who</th><th>Where</th><th>Type</th><th>What</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table></div>
+          </div>
+
+          <div class="tab-panel" id="tab-consent" role="tabpanel" hidden>
+            <h2 class="panel-title">Pending requests</h2>
+            <div id="pending-list" class="card-list"></div>
+            <h2 class="panel-title spaced">Access you have granted</h2>
+            <div id="grants-list" class="card-list"></div>
+          </div>
+
+          <div class="tab-panel" id="tab-kit" role="tabpanel" hidden>
+            <div class="two-col">
+              <div class="panel">
+                <h2 class="panel-title">Your emergency code</h2>
+                <div class="big-code" id="kit-code"></div>
+                <p class="panel-sub">Anyone can scan this, but it reveals nothing until a verified clinician signs in.</p>
+                <div class="panel-actions">
+                  <a id="kit-offline" class="btn btn-pill-primary" target="_blank" rel="noopener"><span>Printable card</span></a>
+                  <button type="button" class="btn btn-secondary-pill" id="kit-reissue"><span>Lost your card? Reissue code</span></button>
+                </div>
+                <label class="switch-row" for="kit-public">
+                  <input type="checkbox" id="kit-public">
+                  <span><strong>Show a minimal public badge</strong><small>Blood group, genotype, critical allergies and one emergency contact, visible to anyone who scans, with no sign-in.</small></span>
+                </label>
+              </div>
+              <div class="panel panel-soft">
+                <h2 class="panel-title">Wallet card and wristband</h2>
+                <img id="kit-wallet" class="kit-img" alt="Emergency wallet card" width="400">
+                <img id="kit-wrist" class="kit-img" alt="Emergency wristband" width="400">
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" id="tab-alerts" role="tabpanel" hidden>
+            <p class="panel-sub">Messages Medistry sent for your record: access request codes, and emergency alerts to you and your contacts. In this demo they are shown here instead of being sent by SMS.</p>
+            <div id="alerts-list" class="card-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>

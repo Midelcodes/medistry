@@ -1,0 +1,40 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Emergency Access</div>
+        <h1 class="page-title">Start an Emergency Break-Glass</h1>
+        <p class="page-lead">For an unconscious patient with a locked phone. Enter the code printed on their wallet card or wristband, or scan the QR code or NFC tag, which opens the same gate.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container two-col">
+        <div class="panel">
+          <h2 class="panel-title">Enter the emergency code</h2>
+          <p class="panel-sub">Codes look like <code>K7QM-4T9X-2HDP-8W2</code>. Dashes, spaces and lowercase are fine.</p>
+          <form id="code-form" class="stack-form" novalidate>
+            <div class="form-group">
+              <label for="code-input">Emergency code</label>
+              <input id="code-input" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXX" required>
+            </div>
+            <p class="form-error" id="code-error" role="alert" hidden></p>
+            <button type="submit" class="btn btn-emergency-cta"><span>Continue to the gate</span></button>
+          </form>
+          <p class="panel-note">Anyone can reach the gate, but it shows no personal data until a verified clinician signs in. Every attempt is logged.</p>
+        </div>
+
+        <div class="panel panel-soft">
+          <h2 class="panel-title">What happens next</h2>
+          <ol class="mini-steps">
+            <li>The gate checks the code and asks the clinician to sign in with an authenticator code.</li>
+            <li>The clinician states a clinical reason. &ldquo;Other&rdquo; needs written justification.</li>
+            <li>A read-only triage summary opens for 60 minutes and the patient is alerted.</li>
+            <li>A second clinician can co-sign to unlock the full history.</li>
+          </ol>
+          <div class="panel-actions">
+            <a href="/demo" class="btn btn-pill-primary"><span>Open the demo patient&rsquo;s gate</span></a>
+            <a href="/how-it-works#steps" class="btn btn-secondary-pill"><span>Read the full flow</span></a>
+          </div>
+          <p class="panel-note">Demo tip: each server start generates new codes. The demo button always points to a valid one.</p>
+        </div>
+      </div>
+    </section>

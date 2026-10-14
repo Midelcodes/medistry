@@ -139,11 +139,13 @@ export class ClinicalTimelineEngine {
       filters?: TimelineFilterOptions;
     }
   ): TimelineItem[] {
-    const records = this.clinicalStore.getPatientRecords(patientId, actor, {
-      consent: context.consent,
-      emergencyGrant: context.emergencyGrant,
-      includeHistoricalVersions: false,
-    });
+    const records = context.emergencyGrant && !context.consent
+      ? this.clinicalStore.getPatientRecordsEmergency(patientId, actor, context.emergencyGrant)
+      : this.clinicalStore.getPatientRecords(patientId, actor, {
+          consent: context.consent,
+          emergencyGrant: context.emergencyGrant,
+          includeHistoricalVersions: false,
+        });
 
     const filters = context.filters || {};
     const items: TimelineItem[] = [];

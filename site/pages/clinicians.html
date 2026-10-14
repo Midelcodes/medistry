@@ -1,0 +1,118 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Clinician Console</div>
+        <h1 class="page-title">Verified Clinicians, Consent First</h1>
+        <p class="page-lead">Sign in, look up a patient safely, request consent with a one-time code, read records you are allowed to see, and co-sign emergency access.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container">
+        <div id="cl-signin" class="panel narrow-panel">
+          <h2 class="panel-title">Clinician sign-in</h2>
+          <p class="panel-sub">Only MDCN-verified clinicians can sign in. Five wrong codes lock the account.</p>
+          <form id="cl-login-form" class="stack-form">
+            <div class="form-group">
+              <label for="cl-clinician">Clinician</label>
+              <select id="cl-clinician" required></select>
+            </div>
+            <div class="form-group">
+              <label for="cl-totp">Authenticator code (6 digits)</label>
+              <input id="cl-totp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+            </div>
+            <div class="demo-hint">
+              <span>Demo environment: no authenticator app is paired.</span>
+              <button type="button" class="btn-text-link" id="cl-show-code">Show the current demo code</button>
+            </div>
+            <p class="form-error" id="cl-login-error" role="alert" hidden></p>
+            <button type="submit" class="btn btn-pill-primary"><span>Sign in</span></button>
+          </form>
+        </div>
+
+        <div id="cl-app" hidden>
+          <div class="panel signed-bar">
+            <div>
+              <div class="signed-name" id="cl-name"></div>
+              <div class="signed-meta" id="cl-meta"></div>
+            </div>
+            <button type="button" class="btn btn-secondary-pill" id="cl-logout"><span>Sign out</span></button>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Clinician console sections">
+            <button class="tab active" role="tab" data-tab="lookup" aria-selected="true">Patient lookup</button>
+            <button class="tab" role="tab" data-tab="records" aria-selected="false">My patients</button>
+            <button class="tab" role="tab" data-tab="emergency" aria-selected="false">Emergency grants</button>
+          </div>
+
+          <div class="tab-panel" id="cl-tab-lookup" role="tabpanel">
+            <div class="two-col">
+              <div class="panel">
+                <h2 class="panel-title">Find a patient</h2>
+                <p class="panel-sub">Lookup shows only initials, birth year and sex, never full details, until the patient consents.</p>
+                <form id="lookup-form" class="stack-form">
+                  <div class="form-group">
+                    <label for="lk-code">Emergency code</label>
+                    <input id="lk-code" type="text" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXX">
+                  </div>
+                  <div class="or-divider"><span>or</span></div>
+                  <div class="form-row-2">
+                    <div class="form-group"><label for="lk-id">Patient ID</label><input id="lk-id" type="text" autocomplete="off" spellcheck="false"></div>
+                    <div class="form-group"><label for="lk-dob">Date of birth</label><input id="lk-dob" type="date"></div>
+                  </div>
+                  <p class="form-error" id="lookup-error" role="alert" hidden></p>
+                  <button type="submit" class="btn btn-pill-primary"><span>Look up</span></button>
+                </form>
+
+                <div id="lookup-result" class="result-card" hidden></div>
+              </div>
+
+              <div class="panel panel-soft">
+                <h2 class="panel-title">Demo patients</h2>
+                <p class="panel-sub">Synthetic patients you can look up. Click one to fill in its code.</p>
+                <ul class="demo-list" id="demo-patients"></ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-panel" id="cl-tab-records" role="tabpanel" hidden>
+            <h2 class="panel-title">Patients who consented</h2>
+            <div id="my-grants" class="card-list"></div>
+            <div id="record-view" class="record-view" hidden>
+              <div class="panel-head">
+                <h2 class="panel-title" id="record-title"></h2>
+                <button type="button" class="btn-text-link" id="record-close">Close record</button>
+              </div>
+              <div id="record-profile"></div>
+              <ol class="timeline" id="record-timeline"></ol>
+            </div>
+          </div>
+
+          <div class="tab-panel" id="cl-tab-emergency" role="tabpanel" hidden>
+            <div class="two-col">
+              <div class="panel">
+                <h2 class="panel-title">Break-glass sessions you opened</h2>
+                <div id="em-grants" class="card-list"></div>
+                <p class="panel-note">Start a new one from the <a href="/emergency">Emergency page</a>.</p>
+              </div>
+              <div class="panel">
+                <h2 class="panel-title">Co-sign another clinician&rsquo;s session</h2>
+                <p class="panel-sub">Dual control: ask the treating clinician for the session ID, then co-sign from your own sign-in to unlock the patient&rsquo;s full history.</p>
+                <form id="cosign-form" class="stack-form">
+                  <div class="form-group"><label for="cs-grant">Session ID</label><input id="cs-grant" type="text" autocomplete="off" spellcheck="false" required></div>
+                  <div class="form-group"><label for="cs-reason">Clinical justification</label><textarea id="cs-reason" rows="3" required minlength="5"></textarea></div>
+                  <p class="form-error" id="cs-error" role="alert" hidden></p>
+                  <button type="submit" class="btn btn-pill-primary"><span>Co-sign</span></button>
+                </form>
+              </div>
+            </div>
+            <div id="fh-view" class="record-view" hidden>
+              <div class="panel-head">
+                <h2 class="panel-title" id="fh-title">Full history</h2>
+                <button type="button" class="btn-text-link" id="fh-close">Close</button>
+              </div>
+              <ol class="timeline" id="fh-timeline"></ol>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>

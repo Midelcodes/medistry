@@ -307,6 +307,49 @@ export class ClinicalDataStore {
   }
 
   /**
+   * 4b. Emergency full-history read. Requires an active break-glass grant that has been
+   * co-signed by a second clinician (EMERGENCY_READ_FULL_HISTORY policy).
+   */
+  getPatientRecordsEmergency(
+    patientId: string,
+    actor: ActorContext,
+    emergencyGrant: EmergencyGrantContext
+  ): Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> {
+    const policyDecision = evaluatePolicy({
+      actor,
+      action: 'EMERGENCY_READ_FULL_HISTORY',
+      targetPatientId: patientId,
+      activeEmergencyGrant: emergencyGrant,
+    });
+    if (!policyDecision.allowed) {
+      throw new Error(`Forbidden: ${policyDecision.reason}`);
+    }
+    if (emergencyGrant.patientId !== patientId) {
+      throw new Error('Forbidden: Emergency grant does not belong to this patient');
+    }
+
+    const results: Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> = [];
+    for (const id of this.patientIndex.get(patientId) || []) {
+      const stored = this.records.get(id);
+      if (!stored || !stored.isLatest) continue;
+      results.push({ record: stored, resource: JSON.parse(decryptField(stored.encryptedPayload)) });
+    }
+
+    this.auditManager.appendEntry({
+      actorId: actor.userId,
+      subjectId: patientId,
+      action: 'EMERGENCY_FULL_HISTORY_READ',
+      accessType: 'EMERGENCY_BREAK_GLASS',
+      facilityId: emergencyGrant.facilityId,
+      ipAddress: '127.0.0.1',
+      userAgent: 'ClinicalEmergencyPortal/1.0',
+      reason: 'Full history read under dual co-signed emergency grant',
+    });
+
+    return results;
+  }
+
+  /**
    * Retrieve a single record by ID.
    */
   getRecordById(recordId: string): StoredClinicalRecord | undefined {

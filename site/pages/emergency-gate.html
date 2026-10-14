@@ -1,0 +1,82 @@
+    <section class="page-header compact">
+      <div class="content-container">
+        <div class="pill-category danger">Emergency Break-Glass Gateway</div>
+        <h1 class="page-title">Emergency Access</h1>
+        <p class="page-lead">Verified attending clinicians only. Every access is time-boxed, read-only and recorded in the audit chain.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container narrow">
+        <div id="gate-loading" class="panel"><p>Checking emergency code&hellip;</p></div>
+
+        <div id="gate-invalid" class="panel danger-panel" hidden>
+          <h2 class="panel-title">Emergency code not found</h2>
+          <p>This code is invalid or has been revoked by the patient. Check for a transcription error and try again.</p>
+          <div class="panel-actions"><a href="/emergency" class="btn btn-pill-primary"><span>Enter a different code</span></a></div>
+        </div>
+
+        <div id="gate-valid" hidden>
+          <div class="code-chip">Patient code: <strong id="gate-code"></strong></div>
+
+          <div id="public-card" class="panel public-card" hidden>
+            <h2 class="panel-title">Public emergency badge (patient opted in)</h2>
+            <dl class="kv-grid">
+              <div><dt>Blood group</dt><dd id="pc-blood"></dd></div>
+              <div><dt>Genotype</dt><dd id="pc-genotype"></dd></div>
+              <div class="wide"><dt>Critical allergies</dt><dd><ul id="pc-allergies" class="plain-list"></ul></dd></div>
+              <div class="wide"><dt>Emergency contact</dt><dd><a id="pc-phone" class="tel-link"></a></dd></div>
+            </dl>
+            <p class="panel-note">Minimal triage data only, shown with the patient&rsquo;s consent. Medications, encounters and directives need a clinician sign-in.</p>
+          </div>
+
+          <div class="alert-box">
+            <strong>Legal and audit notice.</strong> A break-glass grants immediate, 60-minute, read-only access to critical triage attributes. It appends to the audit ledger and alerts the patient and their emergency contacts.
+          </div>
+
+          <div id="gate-signin" class="panel" hidden>
+            <h2 class="panel-title">1. Clinician sign-in</h2>
+            <form id="gate-login-form" class="stack-form">
+              <div class="form-group">
+                <label for="gate-clinician">Verified MDCN clinician</label>
+                <select id="gate-clinician" required></select>
+              </div>
+              <div class="form-group">
+                <label for="gate-totp">Authenticator code (6 digits)</label>
+                <input id="gate-totp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+              </div>
+              <div class="demo-hint" id="gate-demo-hint">
+                <span>Demo environment: no authenticator app is paired.</span>
+                <button type="button" class="btn-text-link" id="gate-show-code">Show the current demo code</button>
+              </div>
+              <p class="form-error" id="gate-login-error" role="alert" hidden></p>
+              <button type="submit" class="btn btn-pill-primary"><span>Sign in</span></button>
+            </form>
+          </div>
+
+          <div id="gate-break" class="panel" hidden>
+            <div class="panel-head">
+              <h2 class="panel-title">2. Confirm break-glass</h2>
+              <div class="signed-in">Signed in as <strong id="gate-me"></strong> <button type="button" class="btn-text-link" id="gate-logout">Sign out</button></div>
+            </div>
+            <form id="break-form" class="stack-form">
+              <div class="form-group">
+                <label for="break-reason">Emergency clinical indication</label>
+                <select id="break-reason" required>
+                  <option value="UNCONSCIOUS">Patient is unconscious or comatose</option>
+                  <option value="LIFE_THREATENING">Life-threatening trauma or shock</option>
+                  <option value="PATIENT_UNABLE_TO_CONSENT">Patient incapacitated and unable to communicate</option>
+                  <option value="OTHER">Other acute emergency (written justification required)</option>
+                </select>
+              </div>
+              <div class="form-group" id="break-details-group" hidden>
+                <label for="break-details">Clinical justification</label>
+                <textarea id="break-details" rows="3" placeholder="Describe the acute indication"></textarea>
+              </div>
+              <p class="form-error" id="break-error" role="alert" hidden></p>
+              <button type="submit" class="btn btn-emergency-cta"><span>Confirm break-glass and open summary</span></button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>

@@ -1,0 +1,74 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">About Medistry</div>
+        <h1 class="page-title">Patient-Controlled Records and Emergency Access</h1>
+        <p class="page-lead">Medistry is a patient medical-record portability platform with a locked-phone emergency break-glass scan, built for Nigeria.</p>
+      </div>
+    </section>
+
+    <section class="principles-section" id="mission">
+      <div class="content-container">
+        <div class="section-header-centered">
+          <div class="pill-category">Our Principles</div>
+          <h2 class="section-heading">Records That Follow the Patient</h2>
+          <p class="section-subheading">A person&rsquo;s medical history should be available to the clinician who needs it, and to nobody else.</p>
+        </div>
+        <div class="principles-grid">
+          <div class="principle-card"><h3>Patient-owned</h3><p>Patients approve every hospital-to-hospital share, by in-app approval or a one-time code, and can revoke it at any time.</p></div>
+          <div class="principle-card"><h3>Emergency-ready</h3><p>A locked phone should not cost a life. A random code on a card or wristband opens a minimal, audited emergency path for verified clinicians.</p></div>
+          <div class="principle-card"><h3>Append-only</h3><p>Records are versioned and never hard-deleted. Every read, write and break-glass lands in a hash-chained audit log.</p></div>
+          <div class="principle-card"><h3>Interoperable</h3><p>HL7 FHIR R4 resources let Medistry exchange data with hospital systems instead of replacing them.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="thanks-section" id="compliance">
+      <div class="content-container">
+        <div class="thanks-glass-card">
+          <div class="thanks-inner-grid">
+            <div class="thanks-badge-pill">Trust &amp; Compliance</div>
+            <h2 class="thanks-big-title">Trusted by Design</h2>
+            <p class="thanks-tagline">Patients own their records. Clinicians earn access. Every action leaves a trace.</p>
+
+            <div class="patient-quote-box">
+              <div class="quote-stars">NDPA 2023</div>
+              <p class="quote-text">
+                Medistry stores clinical data with field-level encryption, never hard-deletes a record, and logs every access in a tamper-evident chain, so patients and regulators can always see what happened and when.
+              </p>
+              <div class="quote-author">
+                <span class="author-name">Nigeria Data Protection Act 2023</span>
+                <span class="author-role">Regulatory scope: Nigeria (NG) &bull; MDCN-licensed clinicians</span>
+              </div>
+            </div>
+
+            <div class="accreditations-row">
+              <div class="accreditation-pill">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>NDPA 2023 Aligned</span>
+              </div>
+              <div class="accreditation-pill">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span>Hash-Chained Audit Log</span>
+              </div>
+              <div class="accreditation-pill">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+                <span>Patient-Controlled Access</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="faq-section" id="faq">
+      <div class="content-container narrow">
+        <div class="section-header-centered">
+          <div class="pill-category">FAQ</div>
+          <h2 class="section-heading">Common Questions</h2>
+        </div>
+        <details class="faq-item"><summary>What does an emergency code reveal when it is scanned?</summary><p>Nothing personal. The gate only confirms the code is valid. Unless the patient turned on the optional public badge (blood group, genotype, critical allergies and an emergency contact), a verified clinician must sign in first.</p></details>
+        <details class="faq-item"><summary>Who can start a break-glass session?</summary><p>Only a clinician with a verified MDCN licence who signs in with an authenticator code and states a clinical reason. Repeated failed sign-ins lock the account.</p></details>
+        <details class="faq-item"><summary>How long does emergency access last?</summary><p>60 minutes, read-only. The full multi-year history needs a second, distinct clinician to co-sign.</p></details>
+        <details class="faq-item"><summary>Can a patient see who looked at their record?</summary><p>Yes. The patient portal lists every access, including break-glass events, and lets the patient dispute anything suspicious.</p></details>
+        <details class="faq-item"><summary>Is this real patient data?</summary><p>No. This environment runs on synthetic patients, facilities and clinicians held in memory, and resets whenever the server restarts.</p></details>
+      </div>
+    </section>

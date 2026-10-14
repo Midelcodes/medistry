@@ -1,0 +1,171 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">How It Works</div>
+        <h1 class="page-title">Private by Default, Open in an Emergency</h1>
+        <p class="page-lead">The path from a random emergency code to an audited, time-boxed grant.</p>
+      </div>
+    </section>
+
+    <section class="steps-section" id="steps">
+      <div class="content-container">
+        <div class="section-header-centered">
+          <div class="pill-category">Break-Glass in Four Steps</div>
+          <h2 class="section-heading">From Scan to Summary</h2>
+        </div>
+        <ol class="steps-list">
+          <li><span class="step-num">1</span><div><h3>Scan</h3><p>A first responder scans the wallet card, wristband or NFC tag. The code opens an emergency gate that shows <strong>no personal data</strong> unless the patient chose to enable a minimal public badge.</p></div></li>
+          <li><span class="step-num">2</span><div><h3>Sign in and state a reason</h3><p>A verified MDCN clinician signs in with a six-digit authenticator code and picks a clinical reason. Choosing &ldquo;Other&rdquo; requires written justification.</p></div></li>
+          <li><span class="step-num">3</span><div><h3>Read the summary</h3><p>The clinician gets a read-only, sub-50 KB triage page for 60 minutes. The patient and their emergency contacts are alerted straight away, and the access is added to the audit chain.</p></div></li>
+          <li><span class="step-num">4</span><div><h3>Co-sign for full history</h3><p>To see the multi-year history, a second, distinct attending clinician signs in on their own device and co-signs with a justification.</p></div></li>
+        </ol>
+        <div class="steps-cta"><a href="/emergency" class="btn btn-pill-primary"><span>Try It Now</span></a></div>
+      </div>
+    </section>
+
+    <section class="infrastructure-section" id="infrastructure">
+      <div class="content-container">
+        <div class="infrastructure-grid">
+          <!-- Left: Information & Specs -->
+          <div class="infra-info-col">
+            <div class="pill-category">How It Works</div>
+            <h2 class="section-heading">Private by Default,<br>Open in an Emergency</h2>
+            <p class="infra-description">
+              A patient is issued a random emergency code. Scanning it shows nothing personal until a verified clinician signs in, states a clinical reason and receives a read-only, 60-minute grant. The patient and their contacts are notified immediately.
+            </p>
+
+            <div class="infra-stats-grid">
+              <div class="infra-stat-card">
+                <div class="infra-num">128-bit</div>
+                <div class="infra-label">Random Emergency Code</div>
+              </div>
+              <div class="infra-stat-card">
+                <div class="infra-num">AES-256</div>
+                <div class="infra-label">GCM Field Encryption</div>
+              </div>
+              <div class="infra-stat-card">
+                <div class="infra-num">60 min</div>
+                <div class="infra-label">Break-Glass Grant</div>
+              </div>
+              <div class="infra-stat-card">
+                <div class="infra-num">&lt; 50 KB</div>
+                <div class="infra-label">Emergency Page Size</div>
+              </div>
+            </div>
+
+            <div class="infra-features-list">
+              <div class="infra-feature-item">
+                <div class="check-circle">✓</div>
+                <div>
+                  <strong>FHIR R4 Clinical Store</strong>
+                  <p>Patient, Encounter, Condition, Observation, DiagnosticReport, MedicationStatement, AllergyIntolerance and DocumentReference.</p>
+                </div>
+              </div>
+              <div class="infra-feature-item">
+                <div class="check-circle">✓</div>
+                <div>
+                  <strong>Built for Nigeria</strong>
+                  <p>Single-region deployment aligned to the Nigeria Data Protection Act 2023 and MDCN licensing.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="infra-action-row">
+              <a href="/demo" class="btn btn-pill-primary">
+                <span>Try the Emergency Demo</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <!-- Right: Record timeline illustration -->
+          <div class="infra-visual-col">
+            <div class="facility-card-frame">
+              <img src="/assets/records.svg"
+                   alt="A patient medical record timeline" 
+                   class="facility-photo" 
+                   loading="lazy">
+              
+              <div class="facility-glass-badge">
+                <div class="badge-header">
+                  <div class="pulsing-radar"></div>
+                  <span>One Record, Every Hospital</span>
+                </div>
+                <div class="badge-address">
+                  Synthetic demo data &bull; Nigeria (NG) deployment
+                </div>
+              </div>
+
+              <!-- Floating Department Pills -->
+              <div class="facility-tag-float tag-1">
+                <span>Consent-Based Sharing</span>
+              </div>
+              <div class="facility-tag-float tag-2">
+                <span>NFC &amp; QR Ready</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="specialists-section" id="specialists">
+      <div class="content-container">
+        <div class="section-header-centered">
+          <div class="pill-category">For Clinicians</div>
+          <h2 class="section-heading">Verified Clinicians, Clear Responsibilities</h2>
+          <p class="section-subheading">Every clinician is licence-verified and signs in with a second factor. What they can see depends on their role and the patient&rsquo;s consent.</p>
+        </div>
+
+        <div class="doctors-grid">
+          <div class="doctor-profile-card">
+            <div class="doctor-image-wrapper">
+              <img src="/assets/clinician-emergency.svg" alt="Emergency clinician icon" class="doc-photo" loading="lazy">
+              <div class="status-badge on-call">&#9679; Break-Glass</div>
+            </div>
+            <div class="doc-details">
+              <div class="doc-specialty-badge">Emergency Physician</div>
+              <h3 class="doc-name">Break-Glass Responder</h3>
+              <p class="doc-credentials">Triggers emergency access with a mandatory clinical reason. Sees the minimal triage summary for 60 minutes.</p>
+              <div class="doc-skills-row">
+                <span>Password + TOTP</span>
+                <span>Read-only</span>
+              </div>
+              <a class="btn btn-doc-book" href="/clinicians"><span>Open Clinician Console</span></a>
+            </div>
+          </div>
+
+          <div class="doctor-profile-card">
+            <div class="doctor-image-wrapper">
+              <img src="/assets/clinician-attending.svg" alt="Attending clinician icon" class="doc-photo" loading="lazy">
+              <div class="status-badge available">&#9679; Consent-Based</div>
+            </div>
+            <div class="doc-details">
+              <div class="doc-specialty-badge">Attending Clinician</div>
+              <h3 class="doc-name">Treating Clinician</h3>
+              <p class="doc-credentials">Reads and adds to a patient&rsquo;s record at the facility, after the patient approves in-app or by SMS OTP.</p>
+              <div class="doc-skills-row">
+                <span>FHIR R4 records</span>
+                <span>Patient consent</span>
+              </div>
+              <a class="btn btn-doc-book" href="/clinicians"><span>Open Clinician Console</span></a>
+            </div>
+          </div>
+
+          <div class="doctor-profile-card">
+            <div class="doctor-image-wrapper">
+              <img src="/assets/clinician-cosign.svg" alt="Co-signing clinician icon" class="doc-photo" loading="lazy">
+              <div class="status-badge available">&#9679; Second Signature</div>
+            </div>
+            <div class="doc-details">
+              <div class="doc-specialty-badge">Co-Signing Clinician</div>
+              <h3 class="doc-name">Full-History Co-Signer</h3>
+              <p class="doc-credentials">A second, distinct attending clinician who co-signs on the terminal to unlock the multi-year history.</p>
+              <div class="doc-skills-row">
+                <span>Dual control</span>
+                <span>Justification logged</span>
+              </div>
+              <a class="btn btn-doc-book" href="/clinicians"><span>Open Clinician Console</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>

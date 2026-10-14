@@ -351,4 +351,14 @@ export class EmergencyBreakGlassEngine {
   getGrant(grantId: string): StoredEmergencyGrant | undefined {
     return this.grants.get(grantId);
   }
+
+  /**
+   * Lists unexpired grants opened by a clinician (newest first).
+   */
+  getActiveGrantsForClinician(clinicianId: string): StoredEmergencyGrant[] {
+    const now = Date.now();
+    return Array.from(this.grants.values())
+      .filter((g) => g.clinicianId === clinicianId && new Date(g.expiresAt).getTime() > now)
+      .sort((a, b) => new Date(b.grantedAt).getTime() - new Date(a.grantedAt).getTime());
+  }
 }

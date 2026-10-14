@@ -1,0 +1,22 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Platform Status</div>
+        <h1 class="page-title">Platform Health</h1>
+        <p class="page-lead">Live status of this Medistry environment, read from the running server.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container">
+        <div class="panel" id="status-panel" aria-live="polite">
+          <div class="panel-head">
+            <h2 class="panel-title">Overall</h2>
+            <span class="chain-chip" id="status-chip">Checking&hellip;</span>
+          </div>
+          <dl class="kv-grid" id="status-grid"></dl>
+          <p class="form-error" id="status-error" role="alert" hidden></p>
+          <div class="panel-actions"><button type="button" class="btn btn-secondary-pill" id="status-refresh"><span>Refresh</span></button></div>
+          <p class="panel-note" id="status-time"></p>
+        </div>
+      </div>
+    </section>

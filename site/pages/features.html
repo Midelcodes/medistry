@@ -1,0 +1,268 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">Platform Features</div>
+        <h1 class="page-title">Built for Patients, Clinicians and Responders</h1>
+        <p class="page-lead">One FHIR-based, encrypted record with consent, emergency access and a tamper-evident audit trail.</p>
+      </div>
+    </section>
+
+    <section class="precision-section" id="break-glass">
+      <div class="content-container">
+        <div class="section-header-centered">
+          <div class="pill-category">Emergency Break-Glass</div>
+          <h2 class="section-heading">Critical Information, Strictly Controlled</h2>
+          <p class="section-subheading">When seconds matter, verified clinicians get the triage essentials first. Everything else stays locked and every action is audited.</p>
+        </div>
+
+        <div class="precision-cards-grid">
+          <!-- Card 1: Emergency & Trauma Care with ECG Pulse Line -->
+          <div class="precision-card main-emergency-card">
+            <div class="card-top-bar">
+              <div class="card-icon-tag bg-soft-indigo">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                </svg>
+              </div>
+              <div class="status-indicator">
+                <span class="live-blink"></span> Audited
+              </div>
+            </div>
+
+            <div class="card-body">
+              <h3 class="precision-card-title">Emergency Break-Glass Summary</h3>
+              <p class="precision-card-desc">Blood group, genotype, drug allergies, active Do Not Resuscitate status, chronic conditions, current medications and one-touch emergency contacts, in a single page under 50 KB.</p>
+
+              <!-- Animated Heartbeat / ECG Waveform Graphic -->
+              <div class="ecg-monitor-box">
+                <div class="ecg-grid-overlay"></div>
+                <svg class="ecg-line-svg" viewBox="0 0 500 80" preserveAspectRatio="none">
+                  <path class="ecg-path" d="M0,40 L60,40 L70,40 L75,25 L85,60 L95,10 L105,70 L115,40 L130,40 L180,40 L190,40 L195,25 L205,60 L215,10 L225,70 L235,40 L250,40 L310,40 L320,40 L325,25 L335,60 L345,10 L355,70 L365,40 L380,40 L440,40 L450,40 L455,25 L465,60 L475,10 L485,70 L495,40 L500,40"/>
+                </svg>
+                <div class="ecg-metrics">
+                  <span>Access: <strong>Read-only</strong></span>
+                  <span>Grant: <strong>60 min</strong></span>
+                  <span>Audit: <strong>Hash-chained</strong></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-footer-action">
+              <a class="btn btn-emergency-cta" href="/how-it-works#steps">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                <span>See How Break-Glass Works</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- Card 2: Dual co-signing -->
+          <div class="precision-card rapid-response-card">
+            <div class="card-top-bar">
+              <div class="card-icon-tag bg-soft-blue">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+              </div>
+              <span class="badge-pill-soft">Dual Co-Sign</span>
+            </div>
+
+            <div class="card-body">
+              <h3 class="precision-card-title">Full History Needs a Second Clinician</h3>
+              <p class="precision-card-desc">Emergency access is minimal by default. Unlocking the multi-year history requires a second, distinct attending clinician to co-sign with a stated justification.</p>
+
+              <!-- Feature Pills with Medical Icons -->
+              <div class="feature-pills-list">
+                <div class="feature-item-pill">
+                  <div class="pill-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>
+                    </svg>
+                  </div>
+                  <div class="pill-info">
+                    <strong>Patient Alerts</strong>
+                    <span>SMS to the patient and contacts, with email and push fallback</span>
+                  </div>
+                </div>
+
+                <div class="feature-item-pill">
+                  <div class="pill-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                  </div>
+                  <div class="pill-info">
+                    <strong>Automatic Expiry</strong>
+                    <span>Every emergency grant closes itself after 60 minutes</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Co-sign stat -->
+            <div class="response-stat-footer">
+              <div class="big-percent-display">
+                <span class="percent-num">2</span>
+                <span class="percent-desc">Distinct clinicians to unlock full history</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="specialties-section" id="specialties">
+      <div class="content-container">
+        <div class="section-header-flex">
+          <div>
+            <div class="pill-category">Platform Features</div>
+            <h2 class="section-heading">Everything Your Record Needs to Travel</h2>
+            <p class="section-subheading">Built for patients, clinicians and emergency responders, on a single FHIR-based, encrypted record.</p>
+          </div>
+          <!-- Filter Tabs -->
+          <div class="feature-tools">
+            <div class="search-input-group page-search">
+              <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="text" id="specialty-search-input" placeholder="Search features (e.g. consent, audit, QR)..." aria-label="Search Medistry features">
+              <button class="search-btn" id="search-action-btn" type="button">Find</button>
+            </div>
+          </div>
+          <div class="filter-tab-pill-group" role="tablist">
+            <button class="filter-pill active" data-filter="all" role="tab" aria-selected="true">All Features</button>
+            <button class="filter-pill" data-filter="patients" role="tab" aria-selected="false">Patients</button>
+            <button class="filter-pill" data-filter="clinicians" role="tab" aria-selected="false">Clinicians</button>
+            <button class="filter-pill" data-filter="emergency" role="tab" aria-selected="false">Emergency</button>
+            <button class="filter-pill" data-filter="security" role="tab" aria-selected="false">Security</button>
+          </div>
+        </div>
+
+        <!-- Feature cards grid -->
+        <div class="specialties-grid" id="specialties-grid">
+          <div class="specialty-card" data-category="patients">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Patient-Controlled Records</h3>
+            <p class="specialty-description">Your clinical history follows you between hospitals. You decide who sees it and can revoke access in one click.</p>
+            <ul class="specialty-checklist">
+              <li>HL7 FHIR R4 resources</li>
+              <li>In-app or SMS OTP consent</li>
+              <li>Instant access revocation</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Patient-Controlled%20Records">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specialty-card" data-category="patients">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Access Log for Every Patient</h3>
+            <p class="specialty-description">See exactly who viewed your record, when, and why, including every emergency break-glass.</p>
+            <ul class="specialty-checklist">
+              <li>Per-patient access history</li>
+              <li>Alerts on emergency access</li>
+              <li>Append-only: no hard deletion</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Patient%20Access%20Log">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specialty-card" data-category="clinicians">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Verified Clinician Access</h3>
+            <p class="specialty-description">Only MDCN-verified clinicians with a password and TOTP second factor can reach patient data.</p>
+            <ul class="specialty-checklist">
+              <li>MDCN licence verification</li>
+              <li>RFC 6238 TOTP authentication</li>
+              <li>Role and relationship-based policy</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Verified%20Clinician%20Access">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specialty-card" data-category="clinicians">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Safe Patient Lookup & Timeline</h3>
+            <p class="specialty-description">Find a patient safely and read a single versioned timeline of encounters, conditions, observations and medications.</p>
+            <ul class="specialty-checklist">
+              <li>Consent-gated lookup</li>
+              <li>Versioned clinical store</li>
+              <li>Document antivirus scanning</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Clinical%20Timeline">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specialty-card" data-category="emergency">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20v.01M20 20v.01"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Emergency QR & NFC Codes</h3>
+            <p class="specialty-description">An unguessable 128-bit code on a wallet card, wristband, lock-screen wallpaper or NFC tag. It reveals nothing on its own.</p>
+            <ul class="specialty-checklist">
+              <li>Crockford Base32 with check character</li>
+              <li>Printable ISO ID-1 wallet card</li>
+              <li>Reissue a lost code instantly</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Emergency%20QR%20%26%20NFC%20Codes">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+
+          <div class="specialty-card" data-category="security">
+            <div class="specialty-icon-box">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <h3 class="specialty-title">Encryption & Tamper-Evident Audit</h3>
+            <p class="specialty-description">Clinical fields are encrypted at rest with AES-256-GCM, and every action is written to a hash-chained audit log.</p>
+            <ul class="specialty-checklist">
+              <li>AES-256-GCM field encryption</li>
+              <li>Hash-chained audit trail</li>
+              <li>Sliding-window rate limiting</li>
+            </ul>
+            <div class="specialty-footer">
+              <a class="btn-text-link" href="/contact?topic=Encryption%20%26%20Audit">
+                <span>Ask About This</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>

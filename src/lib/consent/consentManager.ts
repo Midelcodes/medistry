@@ -242,9 +242,12 @@ export class ConsentLifecycleManager {
    * 3B. One-Time Passcode (OTP) Approval.
    * Clinician inputs the 6-digit OTP provided by the patient via SMS/Email.
    */
-  approveViaOtp(requestId: string, rawOtp: string): StoredConsentGrant {
+  approveViaOtp(requestId: string, rawOtp: string, expectedClinicianId?: string): StoredConsentGrant {
     const request = this.pendingRequests.get(requestId);
     if (!request) throw new Error('Access request not found');
+    if (expectedClinicianId && request.requestingClinicianId !== expectedClinicianId) {
+      throw new Error('Unauthorized: This access request belongs to another clinician');
+    }
     if (request.status !== 'PENDING') throw new Error(`Request is already ${request.status}`);
 
     const now = Date.now();
@@ -434,5 +437,40 @@ export class ConsentLifecycleManager {
       .filter(Boolean)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
-}
 
+  /**
+   * 8. Lists a patient's pending access requests (OTP hash is never exposed).
+   */
+  getPendingRequests(patientId: string): Array<Omit<PendingAccessRequest, 'hashedOtp'>> {
+    const now = Date.now();
+    const result: Array<Omit<PendingAccessRequest, 'hashedOtp'>> = [];
+    for (const req of this.pendingRequests.values()) {
+      if (req.patientId !== patientId) continue;
+      if (req.status === 'PENDING' && now > req.otpExpiresAt) req.status = 'EXPIRED';
+      const { hashedOtp: _omit, ...safe } = req;
+      result.push(safe);
+    }
+    return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /**
+   * 9. Rejects a pending access request on behalf of the patient.
+   */
+  rejectRequest(requestId: string, patientId: string): void {
+    const request = this.pendingRequests.get(requestId);
+    if (!request) throw new Error('Access request not found');
+    if (request.patientId !== patientId) throw new Error('Unauthorized: Patient does not own this access request');
+    if (request.status !== 'PENDING') throw new Error(`Request is already ${request.status}`);
+    request.status = 'REJECTED';
+    this.auditManager.appendEntry({
+      actorId: patientId,
+      subjectId: patientId,
+      action: 'CONSENT_REQUEST_REJECTED',
+      accessType: 'NORMAL_CONSENT',
+      facilityId: request.requestingFacilityId,
+      ipAddress: '127.0.0.1',
+      userAgent: 'PatientApp/1.0',
+      reason: `Patient rejected access request from ${request.requestingClinicianName} (${request.requestingFacilityName})`,
+    });
+  }
+}
