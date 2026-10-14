@@ -79,7 +79,7 @@ queue management and in-country referral routing, plus a LangGraph demo. See [`m
 | `/patients` | Patient portal: timeline, access log + disputes, consent approve/reject/revoke, emergency kit (wallet card, wristband, reissue code, public badge), alerts |
 | `/clinicians` | Clinician console: TOTP sign-in, safe lookup, consent request by one-time code, record view, break-glass sessions, dual co-sign and full history |
 | `/emergency`, `/e/:code` | Emergency code entry and the break-glass gateway |
-| `/facilities` | Facilities and their MDCN-verified clinicians |
+| `/facilities` | Facilities and their demo clinicians (licence checked) |
 | `/contact` | Contact form, stored in `data/contact-messages.jsonl` |
 
 Demo notes: there is no patient login (pick a synthetic patient on the page). Clinician sign-in uses real TOTP verification, and the "Show the current demo code" button is disabled when `NODE_ENV=production`. Pages live in `site/` (`layout.html` + `pages/`), APIs in `src/lib/site/portalApi.ts`.
@@ -115,7 +115,7 @@ npm run seed
 ```
 The seed script populates the database with:
 - **3 Accredited Facilities**: Lagos University Teaching Hospital (LUTH), National Hospital Abuja, Aminu Kano Teaching Hospital.
-- **6 Verified MDCN Clinicians**: Surgeons, hematologists, emergency medicine specialists, and intensivists.
+- **6 synthetic clinicians (licence-checked in the demo)**: Surgeons, hematologists, emergency medicine specialists, and intensivists.
 - **10 Synthetic Patients**: Including **Amara Okonkwo** (Genotype SS Sickle Cell Anemia, severe penicillin anaphylaxis, hydroxyurea regimen).
 
 ### 5. Run the Automated Test Suite

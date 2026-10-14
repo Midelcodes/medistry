@@ -16,7 +16,7 @@
         <h2>${esc(f.name)}</h2>
         <p class="facility-meta">${esc(f.type)} &bull; ${esc(f.region)}, ${esc(f.countryCode)} &bull; ${esc(f.address)}</p>
         <div class="clinician-chips">
-          ${docs.length ? docs.map((d) => `<div class="clinician-chip"><strong>${esc(d.fullName)}</strong><span>${esc(d.specialty)}</span><span>${esc(d.licenseNumber)} <span class="badge green">MDCN verified</span></span></div>`).join('') : '<span class="empty-note">No clinicians listed</span>'}
+          ${docs.length ? docs.map((d) => `<div class="clinician-chip"><strong>${esc(d.fullName)}</strong><span>${esc(d.specialty)}</span><span>${esc(d.licenseNumber)} <span class="badge green">Licence checked (demo)</span></span></div>`).join('') : '<span class="empty-note">No clinicians listed</span>'}
         </div>
       </article>`).join('');
   }
