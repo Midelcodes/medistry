@@ -25,6 +25,7 @@ import { decryptPatientDemographics, type PatientEntity } from './lib/patient/pr
 import { seedClinicalRecords } from './lib/site/seedClinical.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
+import { clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +42,8 @@ const dispatcher = new NotificationDispatcher(consoleProvider);
 const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
 const offlineCardManager = new OfflineEmergencyCardManager();
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
+// Stricter limit on emergency-code lookups to slow code enumeration
+const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
 const consentManager = new ConsentLifecycleManager(auditManager);
 const accessLogManager = new PatientAccessLogManager(auditManager);
 
@@ -192,13 +195,13 @@ function serveStaticFile(res: http.ServerResponse, filePath: string, contentType
 }
 
 const server = http.createServer(async (req, res) => {
-  const clientIp = req.socket.remoteAddress || '127.0.0.1';
+  const ip = getClientIp(req);
   const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = urlObj.pathname;
   const method = req.method || 'GET';
 
   // 1. Rate Limiting Check
-  const rateLimitStatus = rateLimiter.check(clientIp);
+  const rateLimitStatus = rateLimiter.check(ip);
   if (!rateLimitStatus.allowed) {
     sendJson(res, 429, {
       error: 'Too Many Requests',
@@ -206,6 +209,11 @@ const server = http.createServer(async (req, res) => {
       resetMs: rateLimitStatus.resetMs,
       isLockedOut: rateLimitStatus.isLockedOut,
     });
+    return;
+  }
+
+  if ((pathname.startsWith('/api/emergency/gate/') || pathname.startsWith('/e/')) && !gateLimiter.check(ip).allowed) {
+    sendJson(res, 429, { error: 'Too many emergency code lookups. Wait a minute and try again.' });
     return;
   }
 
@@ -269,6 +277,7 @@ const server = http.createServer(async (req, res) => {
 
     // API: Patients (Safe Redacted Directory for Testing)
     if (method === 'GET' && pathname === '/api/patients') {
+      if (!DEMO_MODE) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
       const sanitized = seedData.patients.map((p) => {
         const demo = decryptPatientDemographics(p.patient);
         return {
@@ -313,9 +322,19 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // Clinician session required (cookie or Bearer), and the grant must belong to that clinician.
+      const viewer = handlePortalApi.authenticate(req, { allowCookie: true });
+      if (!viewer) {
+        sendHtml(res, 401, '<h1>Clinician sign-in required</h1><p>Sign in on the <a href="/clinicians">clinician console</a>, then reopen this page.</p>');
+        return;
+      }
       const grant = emergencyEngine.getGrant(grantId);
       if (!grant) {
         sendHtml(res, 404, '<h1>Emergency grant not found or expired</h1>');
+        return;
+      }
+      if (grant.clinicianId !== viewer.id && grant.coSignClinicianId !== viewer.id) {
+        sendHtml(res, 403, '<h1>This emergency grant belongs to another clinician</h1>');
         return;
       }
 
@@ -337,6 +356,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /emergency/offline-card?patientId=:patientId
     if (method === 'GET' && pathname === '/emergency/offline-card') {
+      if (!DEMO_MODE) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
       const patientId = urlObj.searchParams.get('patientId') || seedData.patients[0].patient.id;
       const patient = patientsById.get(patientId);
       if (!patient) {
@@ -373,6 +393,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /emergency/wallet-card?patientId=:patientId
     if (method === 'GET' && pathname === '/emergency/wallet-card') {
+      if (!DEMO_MODE) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
       const patientId = urlObj.searchParams.get('patientId') || seedData.patients[0].patient.id;
       const patient = patientsById.get(patientId);
       if (!patient) {
@@ -392,6 +413,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /emergency/wristband?patientId=:patientId
     if (method === 'GET' && pathname === '/emergency/wristband') {
+      if (!DEMO_MODE) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
       const patientId = urlObj.searchParams.get('patientId') || seedData.patients[0].patient.id;
       const patient = patientsById.get(patientId);
       if (!patient) {

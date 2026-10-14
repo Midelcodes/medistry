@@ -21,7 +21,8 @@ import type { EmergencyBreakGlassEngine } from '../emergency/breakGlassEngine.ts
 import type { ConsoleNotificationProvider } from '../notifications/dispatcher.ts';
 import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockford.ts';
 import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
-import { getSecurityHttpHeaders, sanitizeClinicalText } from '../security/rateLimiter.ts';
+import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
+import { appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import type { ActorContext } from '../policy/enforcer.ts';
 
 export interface PortalContext {
@@ -47,16 +48,17 @@ class HttpError extends Error {
   }
 }
 
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = parseInt(process.env.MAX_EMERGENCY_ATTEMPTS || '5', 10);
 const LOCKOUT_MS = parseInt(process.env.EMERGENCY_LOCKOUT_SECONDS || '3600', 10) * 1000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 export function createPortalApi(ctx: PortalContext) {
   // ---- Clinician authentication state (in memory) ----
-  // Secrets and session tokens are derived from a server key, so they stay valid across
-  // restarts and across parallel/serverless instances (no per-instance memory needed).
-  const serverKey = process.env.JWT_SECRET || 'medistry-dev-only-secret-change-me-in-production';
+  // Secrets and session tokens are derived from JWT_SECRET. If it is unset or a published default,
+  // a random per-process key is used instead (see security/config.ts), never a key from this repo.
+  const serverKey = appSecret('JWT_SECRET');
+  const loginLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 10 });
+  const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   const hmac = (label: string) => crypto.createHmac('sha256', serverKey).update(label).digest();
   const totpSecrets = new Map<string, string>();
   for (const c of ctx.seedData.clinicians) totpSecrets.set(c.id, generateTotpSecret(20, hmac(`totp:${c.id}`)));
@@ -82,8 +84,8 @@ export function createPortalApi(ctx: PortalContext) {
   const contactMessages: Array<Record<string, string>> = [];
 
   // ---- Helpers ----
-  function sendJson(res: http.ServerResponse, status: number, data: unknown) {
-    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...getSecurityHttpHeaders() });
+  function sendJson(res: http.ServerResponse, status: number, data: unknown, extra: Record<string, string> = {}) {
+    res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...getSecurityHttpHeaders(), ...extra });
     res.end(JSON.stringify(data));
   }
 
@@ -123,14 +125,30 @@ export function createPortalApi(ctx: PortalContext) {
     return ctx.seedData.facilities.find((f) => f.id === id)?.name || id;
   }
 
-  function currentClinician(req: http.IncomingMessage): SeedClinician {
-    const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  function clinicianFromToken(token: string): SeedClinician | null {
     const clinicianId = token ? readToken(token) : null;
-    if (!clinicianId) throw new HttpError(401, 'Clinician sign-in required');
-    const clinician = ctx.seedData.clinicians.find((c) => c.id === clinicianId);
+    return clinicianId ? ctx.seedData.clinicians.find((c) => c.id === clinicianId) ?? null : null;
+  }
+
+  // API calls authenticate with the Bearer header only. The session cookie (HttpOnly, SameSite=Strict)
+  // is accepted solely for read-only page navigations such as the emergency summary.
+  function authenticate(req: http.IncomingMessage, opts: { allowCookie?: boolean } = {}): SeedClinician | null {
+    const header = req.headers.authorization || '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const fromHeader = clinicianFromToken(bearer);
+    if (fromHeader || !opts.allowCookie) return fromHeader;
+    return clinicianFromToken(parseCookies(req.headers.cookie)[SESSION_COOKIE] || '');
+  }
+
+  function currentClinician(req: http.IncomingMessage): SeedClinician {
+    const clinician = authenticate(req);
     if (!clinician) throw new HttpError(401, 'Clinician sign-in required');
     return clinician;
+  }
+
+  function sessionCookie(req: http.IncomingMessage, token: string, maxAgeSeconds: number): string {
+    const secure = IS_PRODUCTION || req.headers['x-forwarded-proto'] === 'https';
+    return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`;
   }
 
   const clinicianActor = (c: SeedClinician): ActorContext => ({
@@ -217,7 +235,7 @@ export function createPortalApi(ctx: PortalContext) {
     try {
       const result = await route(req, method, pathname, url);
       if (result === undefined) return false;
-      sendJson(res, 200, result);
+      sendJson(res, 200, result, extraHeaders.get(req));
       return true;
     } catch (err: any) {
       const status = err instanceof HttpError ? err.status : /Forbidden|Unauthorized/.test(err?.message || '') ? 403 : 400;
@@ -288,6 +306,7 @@ export function createPortalApi(ctx: PortalContext) {
 
     // ---------- Patient portal (demo: synthetic patient selected on the page) ----------
     if ((m = pathname.match(/^\/api\/patients\/([^/]+)(?:\/(.*))?$/)) && m[1] !== '') {
+      if (!DEMO_MODE) throw new HttpError(403, 'The patient portal needs patient authentication, which is not implemented. It is disabled outside demo mode.');
       const patient = ctx.patientsById.get(m[1]);
       const sub = m[2] || '';
       if (!patient) throw new HttpError(404, 'Patient not found');
@@ -416,6 +435,7 @@ export function createPortalApi(ctx: PortalContext) {
     }
 
     if (method === 'POST' && pathname === '/api/clinician/login') {
+      if (!loginLimiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many sign-in attempts from this network. Wait a minute and try again.');
       const body = await readBody(req);
       const clinician = ctx.seedData.clinicians.find((c) => c.id === body.clinicianId);
       if (!clinician) throw new HttpError(404, 'Clinician not found');
@@ -434,11 +454,14 @@ export function createPortalApi(ctx: PortalContext) {
         throw new HttpError(401, 'Invalid authenticator code');
       }
       loginFailures.delete(clinician.id);
-      return { token: issueToken(clinician.id), clinician: publicClinician(clinician) };
+      const token = issueToken(clinician.id);
+      extraHeaders.set(req, { 'Set-Cookie': sessionCookie(req, token, Math.floor(SESSION_TTL_MS / 1000)) });
+      return { token, clinician: publicClinician(clinician), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) };
     }
 
     if (method === 'POST' && pathname === '/api/clinician/logout') {
-      // Tokens are stateless and expire on their own; the browser discards its copy on sign-out.
+      // Tokens are stateless and expire on their own; sign-out clears the browser's cookie and stored copy.
+      extraHeaders.set(req, { 'Set-Cookie': sessionCookie(req, '', 0) });
       return { success: true };
     }
 
@@ -579,6 +602,15 @@ export function createPortalApi(ctx: PortalContext) {
       return { grantId: updated.id, fullHistoryAccess: updated.fullHistoryAccess };
     }
 
+    if (method === 'GET' && (m = pathname.match(/^\/api\/emergency\/grants\/([^/]+)\/summary$/))) {
+      const grant = ctx.emergencyEngine.getGrant(m[1]);
+      if (!grant) throw new HttpError(404, 'Emergency grant not found');
+      if (grant.clinicianId !== clinician.id && grant.coSignClinicianId !== clinician.id) {
+        throw new HttpError(403, 'This grant belongs to another clinician');
+      }
+      return { summary: ctx.emergencyEngine.buildEmergencySummary(getPatient(grant.patientId), grant.id) };
+    }
+
     if (method === 'GET' && (m = pathname.match(/^\/api\/emergency\/grants\/([^/]+)\/full-history$/))) {
       const grant = ctx.emergencyEngine.getGrant(m[1]);
       if (!grant) throw new HttpError(404, 'Emergency grant not found');
@@ -593,5 +625,5 @@ export function createPortalApi(ctx: PortalContext) {
     return undefined;
   }
 
-  return handle;
+  return Object.assign(handle, { authenticate });
 }

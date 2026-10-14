@@ -5,6 +5,7 @@
  */
 
 import crypto from 'node:crypto';
+import { appSecret } from '../security/config.ts';
 import type { PatientEntity } from '../patient/profile.ts';
 import { generateOfflineSignedPayload, verifyOfflineSignedPayload, type DeliverablesConfig } from '../code/deliverables.ts';
 
@@ -28,7 +29,7 @@ export interface OfflineEmergencyCardExport {
 export class OfflineEmergencyCardManager {
   private signingKey: string;
 
-  constructor(signingKey = process.env.OFFLINE_CARD_SIGNING_KEY || 'offline_emergency_signing_key_secret_2026') {
+  constructor(signingKey = appSecret('OFFLINE_CARD_SIGNING_KEY')) {
     this.signingKey = signingKey;
   }
 

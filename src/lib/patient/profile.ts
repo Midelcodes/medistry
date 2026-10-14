@@ -4,12 +4,11 @@
  */
 
 import crypto from 'node:crypto';
+import { appSecret } from '../security/config.ts';
 
-// Default 32-byte key for local dev (in production loaded from KMS or FIELD_ENCRYPTION_KEY env)
-const DEFAULT_KEY_HEX = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-
+// Key comes from FIELD_ENCRYPTION_KEY (64 hex chars). If unset or a published default, a random per-process key is used.
 function getEncryptionKey(): Buffer {
-  const envKey = process.env.FIELD_ENCRYPTION_KEY || DEFAULT_KEY_HEX;
+  const envKey = appSecret('FIELD_ENCRYPTION_KEY', { hex: true });
   const keyBuf = Buffer.from(envKey, 'hex');
   if (keyBuf.length !== 32) {
     throw new Error('FIELD_ENCRYPTION_KEY must be a 32-byte hexadecimal string (64 chars)');
