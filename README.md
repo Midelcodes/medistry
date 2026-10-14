@@ -1,6 +1,18 @@
 # MEDISTRY — Patient Medical-Record Portability & Emergency Break-Glass Platform
 
-**MEDISTRY** is a secure, zero-compromise patient medical-record portability platform designed to allow patients' clinical histories to seamlessly follow them across hospitals, while giving attending doctors an instant, break-glass emergency scan when a patient is unconscious and their phone is locked.
+**MEDISTRY** is a patient medical-record portability platform designed to allow patients' clinical histories to seamlessly follow them across hospitals, while giving attending doctors an instant, break-glass emergency scan when a patient is unconscious and their phone is locked.
+
+---
+
+## Status and known limits
+
+- **Runtime is in memory.** `npm start` seeds synthetic data and keeps all state in process memory; it resets on restart. PostgreSQL, Redis and Prisma (`prisma/schema.prisma`, `docker-compose.yml`) are the production target and are not wired into the running server yet.
+- **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. Set `DEMO_MODE=0` to disable them. Patient sign-in is not implemented, so do not run real data on this build.
+- **Secrets.** `JWT_SECRET`, `FIELD_ENCRYPTION_KEY` and `OFFLINE_CARD_SIGNING_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used.
+- **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
+- **Emergency summary "recent encounters"** are placeholder data in this build, not read from the clinical store.
+- Hosting is outside Nigeria for the public demo; the data is synthetic. A real deployment needs an in-country region.
+- Compliance wording describes design intent only and has had no legal review.
 
 ---
 
@@ -15,7 +27,7 @@
    - Each patient is issued an unguessable 128-bit random Crockford Base32 code with Modulo-32 check character (`K7QM-4T9X-2HDP-8W2`).
    - Printable ISO ID-1 wallet cards, wristband templates, lock-screen wallpapers, and NFC NDEF URI tags.
    - Scanning `https://medistry.health/e/<code>` reveals **no personal data** to anonymous viewers.
-   - Verified clinicians (password + RFC 6238 TOTP) can trigger an emergency break-glass procedure with a mandatory clinical reason.
+   - Verified clinicians (RFC 6238 TOTP; a password step is planned) can trigger an emergency break-glass procedure with a mandatory clinical reason.
 
 3. **Ultra-Fast Sub-50KB Emergency Summary**:
    - Server-rendered, semantic HTML template weighing ~10 KB (zero heavy JavaScript frameworks).
@@ -36,6 +48,13 @@
 
 ---
 
+## MCP server (Agentic Africa Challenge)
+
+`mcp/` contains an MCP server that connects Medistry's audited break-glass summary to SATS/TEWS triage,
+queue management and in-country referral routing, plus a LangGraph demo. See [`mcp/README.md`](mcp/README.md).
+
+---
+
 ## 🏗️ Technology Stack
 
 | Component | Technology | Rationale |
@@ -44,9 +63,9 @@
 | **Database & ORM** | PostgreSQL 16 & Prisma ORM | Relational integrity, JSONB support, multi-tenant isolation |
 | **Cache & Tokens** | Redis 7 | Sliding-window rate limiting, lockout counters, short-lived tokens |
 | **Clinical Data Model** | HL7 FHIR R4 | Global interoperability and healthcare standardization |
-| **Encryption & KDF** | AES-256-GCM, Scrypt, HMAC-SHA256 | Zero plaintext clinical PHI stored at rest |
+| **Encryption & KDF** | AES-256-GCM, Scrypt, HMAC-SHA256 | Field-level encryption of patient demographics and clinical payloads in the demo store |
 | **Infrastructure** | Docker Compose | One-command local development and reproducible deployments |
-| **Regulatory Scope** | Single Region (Nigeria, `countryCode: "NG"`) | Full compliance with **NDPA 2023** and **MDCN** licensing |
+| **Regulatory Scope** | Single Region (Nigeria, `countryCode: "NG"`) | Designed around **NDPA 2023** and **MDCN** licensing. Not legally reviewed. |
 
 ---
 
@@ -152,7 +171,7 @@ medical/
 - **Append-Only Immutability**: Clinical records are versioned (`versionId = n + 1`); attempting to hard-delete clinical data throws `ERR_HARD_DELETE_PROHIBITED`.
 - **Tamper-Evident Ledger**: The hash-chained audit log links every read and write (`SHA-256(payload + previousHash)`). Any unauthorized modification breaks the chain.
 - **Timing-Safe Protection**: All codes, tokens, and secrets are evaluated using constant-time comparisons (`crypto.timingSafeEqual`).
-- **WCAG 2.1 AA Compliant**: All emergency triage views and consent screens pass strict contrast, 44px touch-target, and mobile-zoom criteria.
+- **WCAG 2.1 AA checks**: An automated audit covers contrast, 44px touch targets and zoom on the emergency and consent screens. No manual accessibility audit has been done.
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "name": "medical",
   "version": "1.0.0",
-  "description": "A high-fidelity, responsive medical portal landing page built using the exact **UI aesthetic, color harmonies, and visual language** from the provided reference image.",
+  "description": "Patient medical-record portability platform with an audited emergency break-glass scan (synthetic-data demo).",
   "main": "app.js",
   "type": "module",
   "scripts": {
@@ -11,5 +11,5 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "MIT"
 }
