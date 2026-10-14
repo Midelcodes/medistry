@@ -49,9 +49,9 @@ export interface GeneratedCodeResult {
 /**
  * Generates a 128-bit random non-sequential Crockford Base32 code with check character.
  */
-export function generatePatientUniqueCode(domain = 'medistry.health'): GeneratedCodeResult {
-  // 128-bit randomness = 16 bytes
-  const randomBytes = crypto.randomBytes(16);
+export function generatePatientUniqueCode(domain = 'medistry.health', fixedBytes?: Buffer): GeneratedCodeResult {
+  // 128-bit randomness = 16 bytes (fixedBytes is only for deterministic synthetic seed data)
+  const randomBytes = fixedBytes && fixedBytes.length >= 16 ? fixedBytes.subarray(0, 16) : crypto.randomBytes(16);
   
   // Convert random bytes into Crockford Base32 symbols
   let payload = '';

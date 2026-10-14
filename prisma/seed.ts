@@ -6,7 +6,21 @@
  */
 
 import { createPatientRecord, type PatientEntity } from '../src/lib/patient/profile.ts';
+import crypto from 'node:crypto';
 import { generatePatientUniqueCode } from '../src/lib/code/crockford.ts';
+
+/**
+ * Synthetic seed data is deterministic: every server instance (restart, serverless
+ * cold start, or parallel instance) produces the same patient IDs and emergency codes.
+ */
+function seedBytes(label: string): Buffer {
+  return crypto.createHash('sha256').update(`medistry-synthetic-seed:${label}`).digest();
+}
+
+function seedUuid(label: string): string {
+  const h = seedBytes(label).toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
 
 export interface SeedFacility {
   id: string;
@@ -362,10 +376,11 @@ export function generateSeedData(): SeedDatabasePayload {
         userId: `seed-user-${index + 1}`,
         countryCode: 'NG',
         primaryFacilityId: p.originFacilityId,
+        id: seedUuid(`patient-${index}`),
       }
     );
 
-    const emergencyCode = generatePatientUniqueCode('medistry.health');
+    const emergencyCode = generatePatientUniqueCode('medistry.health', seedBytes(`emergency-code-${index}`));
     patientEntity.activeEmergencyCodeId = emergencyCode.rawCode;
 
     return {

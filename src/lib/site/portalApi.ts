@@ -7,6 +7,8 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
 
 import type { SeedDatabasePayload, SeedClinician } from '../../../prisma/seed.ts';
 import { decryptPatientDemographics, type PatientEntity } from '../patient/profile.ts';
@@ -18,7 +20,7 @@ import type { PatientAccessLogManager } from '../audit/accessLogManager.ts';
 import type { EmergencyBreakGlassEngine } from '../emergency/breakGlassEngine.ts';
 import type { ConsoleNotificationProvider } from '../notifications/dispatcher.ts';
 import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockford.ts';
-import { generateSessionToken, generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
+import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText } from '../security/rateLimiter.ts';
 import type { ActorContext } from '../policy/enforcer.ts';
 
@@ -52,9 +54,30 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 export function createPortalApi(ctx: PortalContext) {
   // ---- Clinician authentication state (in memory) ----
+  // Secrets and session tokens are derived from a server key, so they stay valid across
+  // restarts and across parallel/serverless instances (no per-instance memory needed).
+  const serverKey = process.env.JWT_SECRET || 'medistry-dev-only-secret-change-me-in-production';
+  const hmac = (label: string) => crypto.createHmac('sha256', serverKey).update(label).digest();
   const totpSecrets = new Map<string, string>();
-  for (const c of ctx.seedData.clinicians) totpSecrets.set(c.id, generateTotpSecret());
-  const sessions = new Map<string, { clinicianId: string; expiresAt: number }>();
+  for (const c of ctx.seedData.clinicians) totpSecrets.set(c.id, generateTotpSecret(20, hmac(`totp:${c.id}`)));
+
+  function issueToken(clinicianId: string): string {
+    const payload = Buffer.from(JSON.stringify({ c: clinicianId, e: Date.now() + SESSION_TTL_MS })).toString('base64url');
+    return `${payload}.${hmac(`session:${payload}`).toString('base64url')}`;
+  }
+  function readToken(token: string): string | null {
+    const [payload, sig] = token.split('.');
+    if (!payload || !sig) return null;
+    const expected = hmac(`session:${payload}`);
+    const given = Buffer.from(sig, 'base64url');
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+    try {
+      const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+      return typeof data.c === 'string' && data.e > Date.now() ? data.c : null;
+    } catch {
+      return null;
+    }
+  }
   const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
   const contactMessages: Array<Record<string, string>> = [];
 
@@ -103,12 +126,9 @@ export function createPortalApi(ctx: PortalContext) {
   function currentClinician(req: http.IncomingMessage): SeedClinician {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-    const session = token ? sessions.get(token) : undefined;
-    if (!session || session.expiresAt < Date.now()) {
-      if (token) sessions.delete(token);
-      throw new HttpError(401, 'Clinician sign-in required');
-    }
-    const clinician = ctx.seedData.clinicians.find((c) => c.id === session.clinicianId);
+    const clinicianId = token ? readToken(token) : null;
+    if (!clinicianId) throw new HttpError(401, 'Clinician sign-in required');
+    const clinician = ctx.seedData.clinicians.find((c) => c.id === clinicianId);
     if (!clinician) throw new HttpError(401, 'Clinician sign-in required');
     return clinician;
   }
@@ -244,8 +264,17 @@ export function createPortalApi(ctx: PortalContext) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'A valid email address is required');
       const entry = { id: crypto.randomUUID(), receivedAt: new Date().toISOString(), name, email, role, facility, message };
       contactMessages.push(entry);
-      fs.mkdirSync(ctx.dataDir, { recursive: true });
-      fs.appendFileSync(path.join(ctx.dataDir, 'contact-messages.jsonl'), JSON.stringify(entry) + '\n');
+      // Always log (hosting platforms capture stdout); also try to keep a local file copy.
+      console.log(`CONTACT_MESSAGE ${JSON.stringify(entry)}`);
+      for (const dir of [ctx.dataDir, os.tmpdir()]) {
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.appendFileSync(path.join(dir, 'contact-messages.jsonl'), JSON.stringify(entry) + '\n');
+          break;
+        } catch {
+          /* read-only filesystem: try the next location */
+        }
+      }
       return { success: true, reference: entry.id.slice(0, 8).toUpperCase() };
     }
 
@@ -405,14 +434,11 @@ export function createPortalApi(ctx: PortalContext) {
         throw new HttpError(401, 'Invalid authenticator code');
       }
       loginFailures.delete(clinician.id);
-      const { rawToken } = generateSessionToken();
-      sessions.set(rawToken, { clinicianId: clinician.id, expiresAt: Date.now() + SESSION_TTL_MS });
-      return { token: rawToken, clinician: publicClinician(clinician) };
+      return { token: issueToken(clinician.id), clinician: publicClinician(clinician) };
     }
 
     if (method === 'POST' && pathname === '/api/clinician/logout') {
-      const header = req.headers.authorization || '';
-      sessions.delete(header.startsWith('Bearer ') ? header.slice(7).trim() : '');
+      // Tokens are stateless and expire on their own; the browser discards its copy on sign-out.
       return { success: true };
     }
 

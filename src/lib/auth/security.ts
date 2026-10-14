@@ -63,8 +63,8 @@ const BASE32_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /**
  * Generates an RFC 6238-compatible Base32 secret for TOTP MFA.
  */
-export function generateTotpSecret(byteLength = 20): string {
-  const bytes = crypto.randomBytes(byteLength);
+export function generateTotpSecret(byteLength = 20, fixedBytes?: Buffer): string {
+  const bytes = fixedBytes && fixedBytes.length >= byteLength ? fixedBytes.subarray(0, byteLength) : crypto.randomBytes(byteLength);
   let base32 = '';
   let bits = 0;
   let value = 0;

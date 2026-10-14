@@ -145,12 +145,12 @@ export function createPatientRecord(
     chronicConditions?: string[];
     activeMedications?: ActiveMedication[];
   },
-  meta: { userId: string; countryCode?: string; primaryFacilityId?: string }
+  meta: { userId: string; countryCode?: string; primaryFacilityId?: string; id?: string }
 ): PatientEntity {
   const now = new Date().toISOString();
 
   return {
-    id: crypto.randomUUID(),
+    id: meta.id || crypto.randomUUID(),
     userId: meta.userId,
     countryCode: meta.countryCode || 'NG',
     primaryFacilityId: meta.primaryFacilityId,
