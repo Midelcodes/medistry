@@ -57,10 +57,33 @@ npm start
 
 # terminal 2
 cd mcp && npm install
-npm test        # 25 tests: unit, 11 evaluation tasks over stdio MCP, Medistry integration
+npm test        # 32 tests: unit, 11 evaluation tasks over stdio MCP, Medistry integration, agent loop (mocked LLM)
 npm run demo    # LangGraph scenario, writes output/handover.md
 npm run server  # MCP server on stdio for any MCP client
 ```
+
+### LLM agent (Gemini)
+
+`src/agent.js` lets a model choose and call the tools: it starts `src/server.js` over stdio, lists the tools,
+converts their JSON Schemas to Gemini function declarations and runs a tool-calling loop (at most 8 model
+turns), printing each step and the final answer. The model call sits behind `src/llm/gemini.js`
+(`generate({ system, messages, tools }) -> { text, toolCalls }`), so another provider can be added later.
+The key and model are read from the environment only; there is no default model.
+
+```powershell
+cd mcp
+npm install
+$env:GEMINI_API_KEY="<your key>"   # never commit it or paste it into logs
+$env:GEMINI_MODEL="<gemini model id>"
+npm run agent                         # default synthetic chest-pain task
+npm run agent -- "<task text>"        # your own task
+```
+
+The system prompt forbids invented clinical values, and `get_emergency_summary` is blocked in code unless
+the task says the patient is unconscious, contains the emergency code, and the call sets
+`confirmBreakGlass: true`. The MCP server child process does not receive the `GEMINI_*` variables.
+Outputs are decision support only and must be validated by a clinician. `test/agent.test.js` tests the
+loop with a mocked Gemini client (no network, no key).
 
 Claude Desktop:
 
@@ -76,6 +99,7 @@ Claude Desktop:
 | `MEDISTRY_ALLOWED_HOSTS` | Comma-separated hosts patient data may be requested from (default `localhost,127.0.0.1`) |
 | `MEDISTRY_CLINICIAN_TOKEN` or `MEDISTRY_CLINICIAN_ID` + `MEDISTRY_TOTP` | Clinician credentials. The token lasts `SESSION_TIMEOUT_MINUTES` (15) on the Medistry side. |
 | `MEDISTRY_DEMO=1` | Demo servers only: picks a seeded clinician and reads the demo authenticator code |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Agent only (`npm run agent`). Both required; the agent exits if either is unset. |
 
 ## Evaluation
 
