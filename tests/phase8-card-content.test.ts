@@ -284,8 +284,8 @@ describe('6. Patient portal API (end to end, demo mode)', () => {
 
     const first = await (await fetch(`${base}/api/patients/${patientId}/offline-card`, { method: 'POST' })).json();
     const second = await (await fetch(`${base}/api/patients/${patientId}/offline-card`, { method: 'POST' })).json();
-    assert.strictEqual(first.version, 1);
-    assert.strictEqual(second.version, 2);
+    assert.strictEqual(first.cardVersion, 1);
+    assert.strictEqual(second.cardVersion, 2);
     assert.deepStrictEqual(second.payload.e.cond, [conditions[0]]);
     assert.strictEqual(second.payload.e.med.length, 1);
     assert.ok(second.payload.e.dx?.t, 'recent diagnosis included when opted in');

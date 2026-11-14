@@ -141,7 +141,69 @@
     $('#kit-wrist').src = `/emergency/wristband?${q}`;
     $('#kit-offline').href = `/emergency/offline-card?patientId=${encodeURIComponent(patient.id)}`;
     $('#kit-public').checked = !!patient.publicEmergencyOptIn;
+    renderCardOptions(patient);
+    await loadCard(false);
   }
+
+  // ---- My emergency card (offline, signed QR) ----
+  function renderCardOptions(patient) {
+    const sel = patient.card || { conditions: [], medicationIds: [], includeRecentDiagnosis: false };
+    const box = (name, value, checked, label) =>
+      `<label class="check-row"><input type="checkbox" name="${name}" value="${esc(value)}"${checked ? ' checked' : ''}> <span>${esc(label)}</span></label>`;
+    $('#card-opt-conds').innerHTML = patient.chronicConditions.length
+      ? patient.chronicConditions.map((c) => box('card-cond', c, sel.conditions.includes(c), c)).join('')
+      : '<p class="empty-note">No conditions on your record.</p>';
+    $('#card-opt-meds').innerHTML = patient.activeMedications.length
+      ? patient.activeMedications.map((m) => box('card-med', m.id, sel.medicationIds.includes(m.id), `${m.medicationName} (${m.dose})`)).join('')
+      : '<p class="empty-note">No medicines on your record.</p>';
+    $('#card-opt-dx').checked = !!sel.includeRecentDiagnosis;
+    $('#card-dirty').hidden = true;
+  }
+
+  function showCard(card) {
+    $('#card-preview').srcdoc = card.cardHtml;
+    $('#card-download').href = card.qrPngDataUrl;
+    $('#card-meta').textContent = `Card version ${card.cardVersion} · issued ${fmtDate(card.issuedAt)} · expires ${fmtDate(card.expiresAt)}`;
+    const warn = $('#card-warnings');
+    warn.innerHTML = (card.warnings || []).map((w) => `<li>${esc(w)}</li>`).join('');
+    warn.hidden = !(card.warnings || []).length;
+  }
+
+  async function loadCard(reissue) {
+    const card = await api(`${base()}/offline-card`, { method: reissue ? 'POST' : 'GET', auth: false, ...(reissue ? { body: {} } : {}) });
+    showCard(card);
+    return card;
+  }
+
+  async function saveCardChoices() {
+    const checked = (name) => Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map((i) => i.value);
+    try {
+      await api(`${base()}/settings`, {
+        method: 'PATCH',
+        auth: false,
+        body: { cardConditions: checked('card-cond'), cardMedicationIds: checked('card-med'), cardIncludeRecentDiagnosis: $('#card-opt-dx').checked },
+      });
+      $('#card-dirty').hidden = false;
+    } catch (err) { fail(err); loadKit().catch(fail); }
+  }
+
+  $('#my-card').addEventListener('change', (e) => {
+    if (e.target.matches('input[name="card-cond"], input[name="card-med"], #card-opt-dx')) saveCardChoices();
+  });
+
+  $('#card-print').addEventListener('click', () => {
+    const frame = $('#card-preview');
+    if (frame.contentWindow) frame.contentWindow.print();
+  });
+
+  $('#card-reissue').addEventListener('click', async () => {
+    if (!window.confirm('Reissue your emergency card? The new card replaces the old one, so print the new card.')) return;
+    try {
+      const card = await loadCard(true);
+      $('#card-dirty').hidden = true;
+      showToast('New card issued', `Card version ${card.cardVersion} replaces the old one. Print it now.`);
+    } catch (err) { fail(err); }
+  });
 
   $('#kit-reissue').addEventListener('click', async () => {
     if (!window.confirm('Reissue your emergency code? Your current card and wristband will stop working.')) return;

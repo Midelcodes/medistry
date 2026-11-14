@@ -5,6 +5,7 @@
  */
 
 import type { EmergencySummaryData } from './breakGlassEngine.ts';
+import { escapeHtml } from '../security/rateLimiter.ts';
 
 export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
   const { patient, triageEssentials, chronicCare, recentEncounters, legalDirectives, grantMeta } = data;
@@ -450,12 +451,4 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
 </html>`;
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 

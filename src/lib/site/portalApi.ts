@@ -22,7 +22,8 @@ import type { ConsoleNotificationProvider } from '../notifications/dispatcher.ts
 import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockford.ts';
 import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
-import { appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
+import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
+import { buildOfflineCardBundle } from '../emergency/offlineCard.ts';
 import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
@@ -215,6 +216,17 @@ export function createPortalApi(ctx: PortalContext) {
     return t ? { t, d: latest.effectiveDate.slice(0, 10) } : null;
   }
 
+  /**
+   * The patient's offline card with QR and printable HTML. reissue=false returns the current card if it
+   * is still valid (issuing the first one if needed); reissue=true always issues a new version.
+   */
+  async function offlineCardFor(p: PatientEntity, req: http.IncomingMessage, reissue: boolean) {
+    const opts = { recentDiagnosis: p.cardIncludeRecentDiagnosis ? latestDiagnosis(p) : null };
+    const issued = reissue ? { ...ctx.offlineCards.issue(p, opts), reused: false } : ctx.offlineCards.getOrIssue(p, opts);
+    const bundle = await buildOfflineCardBundle(issued, { baseUrl: appBaseUrl(req), formattedCode: ctx.codeByPatient.get(p.id)?.formattedCode });
+    return { ...bundle, reused: issued.reused };
+  }
+
   function parseFilters(url: URL): TimelineFilterOptions {
     const filters: TimelineFilterOptions = {};
     const type = url.searchParams.get('resourceType');
@@ -383,19 +395,9 @@ export function createPortalApi(ctx: PortalContext) {
         return { patient: profileOf(patient) };
       }
 
-      if (method === 'POST' && sub === 'offline-card') {
-        const issued = ctx.offlineCards.issue(patient, {
-          recentDiagnosis: patient.cardIncludeRecentDiagnosis ? latestDiagnosis(patient) : null,
-        });
-        return {
-          token: issued.token,
-          version: issued.card.version,
-          kid: issued.card.kid,
-          issuedAt: issued.card.issuedAt,
-          expiresAt: issued.card.expiresAt,
-          warnings: issued.warnings,
-          payload: issued.payload,
-        };
+      // GET: current card (issues the first one if none is valid). POST: reissue, superseding the old card.
+      if ((method === 'GET' || method === 'POST') && sub === 'offline-card') {
+        return offlineCardFor(patient, req, method === 'POST');
       }
 
       if (method === 'GET' && sub === 'offline-cards') {
@@ -697,5 +699,5 @@ export function createPortalApi(ctx: PortalContext) {
     return undefined;
   }
 
-  return Object.assign(handle, { authenticate });
+  return Object.assign(handle, { authenticate, offlineCardFor });
 }

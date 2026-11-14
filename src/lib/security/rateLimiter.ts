@@ -167,6 +167,18 @@ export function sanitizeClinicalText(input: string): string {
 }
 
 /**
+ * Escapes text for safe interpolation into HTML element content and quoted attributes.
+ */
+export function escapeHtml(str: string): string {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
  * Production Security HTTP Headers Builder
  * Provides strict CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy.
  */

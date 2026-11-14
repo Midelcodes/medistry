@@ -55,6 +55,22 @@ export function clientIp(req: http.IncomingMessage): string {
   return req.socket.remoteAddress || '127.0.0.1';
 }
 
+/**
+ * Public base URL used in printed QR codes (no trailing slash). APP_URL wins; otherwise the request's
+ * own origin, then http://localhost:PORT. A printed card outlives the request, so set APP_URL in deployments.
+ */
+export function appBaseUrl(req?: http.IncomingMessage): string {
+  const configured = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\/[^\s/]+/i.test(configured)) return configured;
+  const host = req?.headers.host;
+  if (host && /^[A-Za-z0-9.-]+(:\d+)?$/.test(host)) {
+    const forwarded = TRUST_PROXY ? String(req!.headers['x-forwarded-proto'] || '').split(',')[0].trim() : '';
+    const proto = forwarded === 'https' || forwarded === 'http' ? forwarded : 'http';
+    return `${proto}://${host}`;
+  }
+  return `http://localhost:${parseInt(process.env.PORT || '3000', 10) || 3000}`;
+}
+
 export function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   for (const part of (header || '').split(';')) {

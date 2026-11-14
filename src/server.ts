@@ -19,8 +19,7 @@ import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { getPublicJwks } from './lib/crypto/cardKeys.ts';
 import { OfflineCardStore } from './lib/emergency/offlineCardStore.ts';
-import { cardValidityDays } from './lib/emergency/cardPayload.ts';
-import { generateWalletCardSvg, generateWristbandSvg } from './lib/code/deliverables.ts';
+import { generateWalletCardSvg, generateWristbandSvg, DEFAULT_CONFIG } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
 import { PatientAccessLogManager } from './lib/audit/accessLogManager.ts';
@@ -28,7 +27,7 @@ import { decryptPatientDemographics, type PatientEntity } from './lib/patient/pr
 import { seedClinicalRecords } from './lib/site/seedClinical.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
-import { clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
+import { appBaseUrl, clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +42,7 @@ const timelineEngine = new ClinicalTimelineEngine(clinicalStore);
 const consoleProvider = new ConsoleNotificationProvider();
 const dispatcher = new NotificationDispatcher(consoleProvider);
 const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
+// Loads the offline card signing key at startup, so a missing production key fails closed immediately.
 const offlineCardManager = new OfflineEmergencyCardManager();
 const offlineCardStore = new OfflineCardStore(auditManager);
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
@@ -377,30 +377,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', cardValidityDays());
-      sendHtml(
-        res,
-        200,
-        `<!DOCTYPE html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>OFFLINE EMERGENCY CARD — MEDISTRY</title>
-          <style>
-            body { font-family: -apple-system, sans-serif; background: #f1f5f9; padding: 24px; display: flex; flex-direction: column; align-items: center; }
-            .info { max-width: 400px; margin-top: 16px; font-size: 13px; color: #475569; text-align: center; }
-            .btn-print { margin-top: 16px; padding: 10px 20px; background: #0f172a; color: #fff; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
-          </style>
-        </head>
-        <body>
-          ${card.printableCardHtml}
-          <div class="info">
-            Signed by Medistry (ES256). The signature can be checked offline with Medistry's published public key. Synthetic demo data.
-          </div>
-          <button class="btn-print" onclick="window.print()">🖨️ Print Emergency Card</button>
-        </body>
-        </html>`
-      );
+      // Same card as the patient portal: the current valid card, or the first one if none exists.
+      const card = await handlePortalApi.offlineCardFor(patient, req, false);
+      sendHtml(res, 200, card.cardHtml);
       return;
     }
 
@@ -415,9 +394,10 @@ const server = http.createServer(async (req, res) => {
       }
       const demo = decryptPatientDemographics(patient);
       const svg = generateWalletCardSvg(
-        patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
+        codeByPatient.get(patient.id)?.formattedCode || patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
         `${demo.firstName} ${demo.lastName}`,
-        patient.emergencyContacts[0]?.phone
+        patient.emergencyContacts[0]?.phone,
+        { ...DEFAULT_CONFIG, baseUrl: appBaseUrl(req) }
       );
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', ...getSecurityHttpHeaders() });
       res.end(svg);
@@ -433,7 +413,10 @@ const server = http.createServer(async (req, res) => {
         sendHtml(res, 404, '<h1>Patient not found</h1>');
         return;
       }
-      const svg = generateWristbandSvg(patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2');
+      const svg = generateWristbandSvg(
+        codeByPatient.get(patient.id)?.formattedCode || patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
+        { ...DEFAULT_CONFIG, baseUrl: appBaseUrl(req) }
+      );
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', ...getSecurityHttpHeaders() });
       res.end(svg);
       return;

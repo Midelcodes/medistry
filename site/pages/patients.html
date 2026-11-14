@@ -80,6 +80,38 @@
                 <img id="kit-wrist" class="kit-img" alt="Emergency wristband" width="400">
               </div>
             </div>
+
+            <div class="panel card-panel" id="my-card">
+              <h2 class="panel-title">My emergency card</h2>
+              <p class="panel-sub">A signed card that a clinician can scan with no internet. It always shows your blood group, genotype, severe allergies, DNR status and your primary emergency contact. Add anything else only if you want it on the card: <strong>anyone who reads the QR code can see what is in it</strong>, and conditions or medicines can reveal sensitive diagnoses.</p>
+              <div class="two-col">
+                <div>
+                  <fieldset class="card-options">
+                    <legend>Conditions</legend>
+                    <div id="card-opt-conds"></div>
+                  </fieldset>
+                  <fieldset class="card-options">
+                    <legend>Medicines</legend>
+                    <div id="card-opt-meds"></div>
+                  </fieldset>
+                  <fieldset class="card-options">
+                    <legend>Recent diagnosis</legend>
+                    <label class="check-row"><input type="checkbox" id="card-opt-dx"> <span>Include my most recent diagnosis</span></label>
+                  </fieldset>
+                  <p class="card-note" id="card-dirty" hidden>Your choices are saved. Reissue the card to put them on it.</p>
+                  <div class="panel-actions">
+                    <a id="card-download" class="btn btn-pill-primary" download="medistry-emergency-card-qr.png"><span>Download PNG</span></a>
+                    <button type="button" class="btn btn-secondary-pill" id="card-print"><span>Print card</span></button>
+                    <button type="button" class="btn btn-secondary-pill" id="card-reissue"><span>Reissue card</span></button>
+                  </div>
+                  <p class="card-meta" id="card-meta"></p>
+                  <ul class="card-warnings" id="card-warnings" hidden></ul>
+                </div>
+                <div>
+                  <iframe id="card-preview" class="card-preview" title="Emergency card preview, front and back"></iframe>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="tab-panel" id="tab-alerts" role="tabpanel" hidden>

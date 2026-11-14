@@ -1,7 +1,9 @@
 /**
  * MEDISTRY Offline Card Registry (in memory; mirrors the OfflineCard model in prisma/schema.prisma)
  * Every issued card gets a row with its version, signing key id and a SHA-256 hash of the token.
- * The token itself is not stored. Issuing a new card supersedes the previous one.
+ * Rows never hold the token. Only the CURRENT card's token is kept in process memory so the patient
+ * can view and print it again without reissuing; it is dropped when the card is superseded.
+ * Issuing a new card supersedes the previous one.
  */
 import crypto from 'node:crypto';
 import type { PatientEntity } from '../patient/profile.ts';
@@ -37,6 +39,7 @@ export interface IssuedOfflineCard {
 export class OfflineCardStore {
   private cards = new Map<string, OfflineCardRecord>();
   private byPatient = new Map<string, string[]>(); // patientId -> card ids, oldest first
+  private currentTokens = new Map<string, { cardId: string; token: string }>(); // patientId -> current card token
   private auditManager?: AuditChainManager;
 
   constructor(auditManager?: AuditChainManager) {
@@ -76,6 +79,7 @@ export class OfflineCardStore {
 
     this.cards.set(card.id, card);
     this.byPatient.set(patient.id, [...(this.byPatient.get(patient.id) || []), card.id]);
+    this.currentTokens.set(patient.id, { cardId: card.id, token });
     patient.cardVersion = version;
     patient.updatedAt = new Date().toISOString();
 
@@ -93,6 +97,24 @@ export class OfflineCardStore {
     });
 
     return { card: { ...card }, token, payload, warnings };
+  }
+
+  /**
+   * Returns the patient's current card if it is still valid (not superseded, revoked or expired),
+   * otherwise issues a new one. `reused` tells the caller which happened.
+   */
+  getOrIssue(
+    patient: PatientEntity,
+    opts: Parameters<OfflineCardStore['issue']>[1] = {}
+  ): IssuedOfflineCard & { reused: boolean } {
+    const current = this.getCurrent(patient.id);
+    const cached = this.currentTokens.get(patient.id);
+    const now = opts.nowSeconds !== undefined ? opts.nowSeconds * 1000 : Date.now();
+    if (current && cached?.cardId === current.id && new Date(current.expiresAt).getTime() > now) {
+      const payload = JSON.parse(Buffer.from(cached.token.split('.')[1], 'base64url').toString('utf8')) as CompactCardPayload;
+      return { card: { ...current }, token: cached.token, payload, warnings: [], reused: true };
+    }
+    return { ...this.issue(patient, opts), reused: false };
   }
 
   /** The newest card that has not been superseded or revoked. */
