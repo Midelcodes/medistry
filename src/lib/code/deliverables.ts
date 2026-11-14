@@ -5,20 +5,21 @@
  * and (5) Cryptographically Signed Offline Emergency Payload.
  */
 
-import crypto from 'node:crypto';
 import type { PatientEntity } from '../patient/profile.ts';
+import { signCompactJws, verifyCompactJws, getPublicJwks } from '../crypto/cardKeys.ts';
 
 export interface DeliverablesConfig {
   domain: string;
   emergencyHotline: string;
-  offlineSigningKey?: string;
 }
 
 export const DEFAULT_CONFIG: DeliverablesConfig = {
   domain: 'medistry.health',
   emergencyHotline: '+234 800 420 6337',
-  offlineSigningKey: 'medistry_offline_hmac_secret_key_minimum_32_characters_for_safety',
 };
+
+/** Issuer of offline cards. Medistry is not a government authority and the token must not claim to be one. */
+export const OFFLINE_CARD_ISSUER = 'medistry';
 
 /**
  * 1. Generates the SVG vector representation for a standard ID-1 Wallet Card (85.6mm x 53.98mm).
@@ -195,21 +196,22 @@ export function generateNfcNdefPayload(
 }
 
 /**
- * 5. Generates a Cryptographically Signed Offline Emergency Payload.
- * Enables ambulance/first-responder offline apps to verify clinical triage data without cell service.
+ * 5. Generates an ES256-signed offline emergency payload (compact JWS, see crypto/cardKeys.ts).
+ * Scanners verify it offline with the published public key, which cannot be used to sign.
+ * `config` is accepted for backward compatibility and is not used for signing.
  */
 export function generateOfflineSignedPayload(
   patient: PatientEntity,
   formattedCode: string,
   expiresInDays = 30,
-  config: DeliverablesConfig = DEFAULT_CONFIG
+  _config: DeliverablesConfig = DEFAULT_CONFIG
 ): { token: string; payload: Record<string, any>; signature: string } {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + expiresInDays * 86400;
 
   // Minimal critical triage data only
   const payload = {
-    iss: 'MEDISTRY_REGIONAL_HEALTH_AUTHORITY',
+    iss: OFFLINE_CARD_ISSUER,
     sub: patient.id,
     code: formattedCode,
     bloodGroup: patient.bloodGroup,
@@ -222,53 +224,21 @@ export function generateOfflineSignedPayload(
     exp,
   };
 
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-
-  const signingInput = `${encodedHeader}.${encodedPayload}`;
-  const key = config.offlineSigningKey || DEFAULT_CONFIG.offlineSigningKey!;
-  const signature = crypto.createHmac('sha256', key).update(signingInput).digest('base64url');
-
-  const token = `${signingInput}.${signature}`;
-
+  const token = signCompactJws(payload);
   return {
     token,
     payload,
-    signature,
+    signature: token.split('.')[2],
   };
 }
 
 /**
- * Verifies a signed offline emergency payload.
+ * Verifies a signed offline emergency payload against a JWK set (default: this server's published keys).
+ * Only ES256 is accepted.
  */
 export function verifyOfflineSignedPayload(
   token: string,
-  config: DeliverablesConfig = DEFAULT_CONFIG
+  jwks: JsonWebKey[] = getPublicJwks()
 ): { valid: boolean; payload?: Record<string, any>; error?: string } {
-  const parts = token.split('.');
-  if (parts.length !== 3) {
-    return { valid: false, error: 'Malformed token structure' };
-  }
-
-  const [encodedHeader, encodedPayload, providedSignature] = parts;
-  const signingInput = `${encodedHeader}.${encodedPayload}`;
-  const key = config.offlineSigningKey || DEFAULT_CONFIG.offlineSigningKey!;
-  const expectedSignature = crypto.createHmac('sha256', key).update(signingInput).digest('base64url');
-
-  if (providedSignature !== expectedSignature) {
-    return { valid: false, error: 'Cryptographic signature mismatch: offline card has been altered' };
-  }
-
-  try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && now > payload.exp) {
-      return { valid: false, error: 'Offline emergency card signature has expired' };
-    }
-    return { valid: true, payload };
-  } catch {
-    return { valid: false, error: 'Failed to parse payload JSON' };
-  }
+  return verifyCompactJws(token, jwks);
 }
-

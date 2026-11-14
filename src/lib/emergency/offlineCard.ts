@@ -4,10 +4,9 @@
  * allowing ambulance crews and EMTs to verify critical medical data without network access.
  */
 
-import crypto from 'node:crypto';
-import { appSecret } from '../security/config.ts';
 import type { PatientEntity } from '../patient/profile.ts';
-import { generateOfflineSignedPayload, verifyOfflineSignedPayload, type DeliverablesConfig } from '../code/deliverables.ts';
+import { generateOfflineSignedPayload, verifyOfflineSignedPayload } from '../code/deliverables.ts';
+import { getKid, getPublicJwks } from '../crypto/cardKeys.ts';
 
 export interface OfflineEmergencyCardExport {
   patientId: string;
@@ -27,22 +26,20 @@ export interface OfflineEmergencyCardExport {
 }
 
 export class OfflineEmergencyCardManager {
-  private signingKey: string;
-
-  constructor(signingKey = appSecret('OFFLINE_CARD_SIGNING_KEY')) {
-    this.signingKey = signingKey;
+  /**
+   * Cards are signed with ES256 keys from crypto/cardKeys.ts (OFFLINE_CARD_PRIVATE_KEY).
+   * The optional argument is the old HMAC key from OFFLINE_CARD_SIGNING_KEY; it is deprecated and ignored.
+   * Loading the key here makes a missing production key fail at startup rather than on first use.
+   */
+  constructor(_deprecatedHmacKey?: string) {
+    getKid();
   }
 
   /**
    * Generates a complete signed offline emergency card bundle.
    */
   exportOfflineEmergencyCard(patient: PatientEntity, formattedCode: string, validityDays = 30): OfflineEmergencyCardExport {
-    const config: DeliverablesConfig = {
-      domain: 'medistry.health',
-      offlineSigningKey: this.signingKey,
-    };
-
-    const signed = generateOfflineSignedPayload(patient, formattedCode, validityDays, config);
+    const signed = generateOfflineSignedPayload(patient, formattedCode, validityDays);
     const expDate = new Date(signed.payload.exp * 1000).toISOString();
 
     const printableCardHtml = this.renderPrintableOfflineCard({
@@ -85,10 +82,7 @@ export class OfflineEmergencyCardManager {
     payload?: Record<string, any>;
     error?: string;
   } {
-    return verifyOfflineSignedPayload(token, {
-      domain: 'medistry.health',
-      offlineSigningKey: this.signingKey,
-    });
+    return verifyOfflineSignedPayload(token, getPublicJwks());
   }
 
   /**

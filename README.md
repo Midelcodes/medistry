@@ -8,7 +8,7 @@
 
 - **Runtime is in memory.** `npm start` seeds synthetic data and keeps all state in process memory; it resets on restart. PostgreSQL, Redis and Prisma (`prisma/schema.prisma`, `docker-compose.yml`) are the production target and are not wired into the running server yet.
 - **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. Set `DEMO_MODE=0` to disable them. Patient sign-in is not implemented, so do not run real data on this build.
-- **Secrets.** `JWT_SECRET`, `FIELD_ENCRYPTION_KEY` and `OFFLINE_CARD_SIGNING_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used.
+- **Secrets.** `JWT_SECRET` and `FIELD_ENCRYPTION_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used. `OFFLINE_CARD_PRIVATE_KEY` (ES256 card signing key) comes from `node scripts/gen-card-key.mjs`; without it a random per-process key is used in dev, and the server refuses to start in production with `DEMO_MODE=0`.
 - **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
 - **Emergency summary "recent encounters"** are placeholder data in this build, not read from the clinical store.
 - Hosting is outside Nigeria for the public demo; the data is synthetic. A real deployment needs an in-country region.
@@ -44,7 +44,7 @@
    - Patient-visible **"Who accessed my record"** dashboard with dispute escalation tickets for Platform Admin review.
 
 6. **Offline First-Responder Signed Card**:
-   - Exportable offline emergency card signed via HMAC-SHA256 by the regional health authority, allowing ambulance EMTs to verify blood group and severe allergies without cellular connectivity.
+   - Exportable offline emergency card signed by Medistry with ES256 (ECDSA P-256). Scanners verify it with the public key from `/.well-known/medistry-keys.json`, which cannot be used to forge cards.
 
 ---
 
@@ -99,7 +99,7 @@ cp .env.example .env
 ```
 Key configuration values in `.env`:
 - `FIELD_ENCRYPTION_KEY`: 32-byte hexadecimal key for AES-256-GCM demographic and clinical encryption.
-- `OFFLINE_CARD_SIGNING_KEY`: Secret key for HMAC-SHA256 offline signed emergency cards.
+- `OFFLINE_CARD_PRIVATE_KEY`: ES256 private key for offline emergency cards (`node scripts/gen-card-key.mjs`). `OFFLINE_CARD_SIGNING_KEY` is deprecated and ignored.
 - `DEPLOYMENT_COUNTRY`: `NG` (Single-region residency).
 
 ### 3. Start Database and Redis Services

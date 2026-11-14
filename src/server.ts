@@ -17,6 +17,7 @@ import { NotificationDispatcher, ConsoleNotificationProvider } from './lib/notif
 import { EmergencyBreakGlassEngine } from './lib/emergency/breakGlassEngine.ts';
 import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
+import { getPublicJwks } from './lib/crypto/cardKeys.ts';
 import { generateWalletCardSvg, generateWristbandSvg } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
@@ -41,6 +42,7 @@ const consoleProvider = new ConsoleNotificationProvider();
 const dispatcher = new NotificationDispatcher(consoleProvider);
 const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
 const offlineCardManager = new OfflineEmergencyCardManager();
+const OFFLINE_CARD_VALIDITY_DAYS = Math.max(1, parseInt(process.env.OFFLINE_CARD_VALIDITY_DAYS || '30', 10) || 30);
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -236,6 +238,14 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Public keys for verifying offline emergency cards (current key first, then previous keys kept for rotation).
+    // Never contains private key material.
+    if (method === 'GET' && pathname === '/.well-known/medistry-keys.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json', ...getSecurityHttpHeaders(), 'Cache-Control': 'public, max-age=3600' });
+      res.end(JSON.stringify({ keys: getPublicJwks() }));
+      return;
+    }
+
     // Demo shortcut: the priority patient's emergency gate (code is generated at startup)
     if (method === 'GET' && pathname === '/demo') {
       const demoCode = codeByPatient.get(seedData.patients[0].patient.id)?.formattedCode || seedData.patients[0].emergencyCode.formattedCode;
@@ -364,7 +374,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', 30);
+      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', OFFLINE_CARD_VALIDITY_DAYS);
       sendHtml(
         res,
         200,
@@ -382,7 +392,7 @@ const server = http.createServer(async (req, res) => {
         <body>
           ${card.printableCardHtml}
           <div class="info">
-            Cryptographically signed by Regional Health Authority. Ambulance first responders can scan and verify signature offline.
+            Signed by Medistry (ES256). The signature can be checked offline with Medistry's published public key. Synthetic demo data.
           </div>
           <button class="btn-print" onclick="window.print()">🖨️ Print Emergency Card</button>
         </body>
