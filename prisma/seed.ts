@@ -163,6 +163,8 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      // Offline card opt-ins (synthetic): the condition and one medication, no recent diagnosis
+      card: { conditions: ['Sickle Cell Anemia (HbSS)'], medicationNames: ['Hydroxyurea'], includeRecentDiagnosis: false },
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -341,6 +343,12 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      // Offline card opt-ins (synthetic): both conditions, two medications and the recent diagnosis
+      card: {
+        conditions: ['Congestive Heart Failure (NYHA Class III)', 'Atrial Fibrillation'],
+        medicationNames: ['Furosemide', 'Digoxin'],
+        includeRecentDiagnosis: true,
+      },
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -382,6 +390,16 @@ export function generateSeedData(): SeedDatabasePayload {
 
     const emergencyCode = generatePatientUniqueCode('medistry.health', seedBytes(`emergency-code-${index}`));
     patientEntity.activeEmergencyCodeId = emergencyCode.rawCode;
+
+    // Card opt-ins select existing items only (medications by their generated ids)
+    const card = (p as { card?: { conditions: string[]; medicationNames: string[]; includeRecentDiagnosis: boolean } }).card;
+    if (card) {
+      patientEntity.cardConditions = card.conditions.filter((c) => patientEntity.chronicConditions.includes(c));
+      patientEntity.cardMedicationIds = patientEntity.activeMedications
+        .filter((m) => card.medicationNames.includes(m.medicationName))
+        .map((m) => m.id);
+      patientEntity.cardIncludeRecentDiagnosis = card.includeRecentDiagnosis;
+    }
 
     return {
       patient: patientEntity,

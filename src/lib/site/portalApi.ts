@@ -23,7 +23,9 @@ import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockfo
 import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
-import type { ActorContext } from '../policy/enforcer.ts';
+import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
+import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
+import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
 
 export interface PortalContext {
   seedData: SeedDatabasePayload;
@@ -37,6 +39,7 @@ export interface PortalContext {
   accessLogManager: PatientAccessLogManager;
   emergencyEngine: EmergencyBreakGlassEngine;
   notifications: ConsoleNotificationProvider;
+  offlineCards: OfflineCardStore;
   dataDir: string;
 }
 
@@ -195,7 +198,21 @@ export function createPortalApi(ctx: PortalContext) {
       chronicConditions: p.chronicConditions,
       activeMedications: p.activeMedications,
       emergencyCode: code?.formattedCode || null,
+      card: {
+        conditions: p.cardConditions,
+        medicationIds: p.cardMedicationIds,
+        includeRecentDiagnosis: p.cardIncludeRecentDiagnosis,
+        version: p.cardVersion,
+      },
     };
+  }
+
+  /** Most recent diagnosis for the card: the latest encounter's coded reason, read as the patient. */
+  function latestDiagnosis(p: PatientEntity): CardDiagnosis | null {
+    const [latest] = ctx.timelineEngine.getTimeline(p.id, patientActor(p), { filters: { resourceType: 'Encounter' } });
+    const resource = latest?.resource as { reasonCode?: Array<{ text?: string }> } | undefined;
+    const t = resource?.reasonCode?.[0]?.text;
+    return t ? { t, d: latest.effectiveDate.slice(0, 10) } : null;
   }
 
   function parseFilters(url: URL): TimelineFilterOptions {
@@ -314,20 +331,75 @@ export function createPortalApi(ctx: PortalContext) {
       if (method === 'GET' && sub === '') return { patient: profileOf(patient) };
 
       if (method === 'PATCH' && sub === 'settings') {
+        // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
         const body = await readBody(req);
-        if (typeof body.publicEmergencyOptIn !== 'boolean') throw new HttpError(400, 'publicEmergencyOptIn must be true or false');
-        patient.publicEmergencyOptIn = body.publicEmergencyOptIn;
+        const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis'];
+        const keys = Object.keys(body || {});
+        const extra = keys.filter((k) => !allowed.includes(k));
+        if (extra.length) throw new HttpError(400, `Only visibility settings can be changed here. Not allowed: ${extra.join(', ')}`);
+        if (!keys.length) throw new HttpError(400, `Provide at least one of: ${allowed.join(', ')}`);
+        if (body.publicEmergencyOptIn !== undefined && typeof body.publicEmergencyOptIn !== 'boolean') {
+          throw new HttpError(400, 'publicEmergencyOptIn must be true or false');
+        }
+        let card: ReturnType<typeof validateCardSelection>;
+        try {
+          card = validateCardSelection(patient, body);
+        } catch (err: any) {
+          throw new HttpError(400, err.message);
+        }
+        if (Object.keys(card).length) {
+          const decision = evaluatePolicy({ actor: patientActor(patient), action: 'PATIENT_SET_CARD_VISIBILITY', targetPatientId: patient.id });
+          if (!decision.allowed) throw new HttpError(decision.statusCode, decision.reason);
+        }
+
+        if (typeof body.publicEmergencyOptIn === 'boolean') {
+          patient.publicEmergencyOptIn = body.publicEmergencyOptIn;
+          ctx.auditManager.appendEntry({
+            actorId: patient.id,
+            subjectId: patient.id,
+            action: 'PATIENT_UPDATED_PUBLIC_BADGE_SETTING',
+            accessType: 'NORMAL_CONSENT',
+            ipAddress: '127.0.0.1',
+            userAgent: 'PatientPortal/1.0',
+            reason: `Public emergency badge ${patient.publicEmergencyOptIn ? 'enabled' : 'disabled'} by patient`,
+          });
+        }
+        if (Object.keys(card).length) {
+          if (card.cardConditions) patient.cardConditions = card.cardConditions;
+          if (card.cardMedicationIds) patient.cardMedicationIds = card.cardMedicationIds;
+          if (card.cardIncludeRecentDiagnosis !== undefined) patient.cardIncludeRecentDiagnosis = card.cardIncludeRecentDiagnosis;
+          // Counts only: the audit trail must not list sensitive conditions or medications.
+          ctx.auditManager.appendEntry({
+            actorId: patient.id,
+            subjectId: patient.id,
+            action: 'PATIENT_UPDATED_CARD_VISIBILITY',
+            accessType: 'NORMAL_CONSENT',
+            ipAddress: '127.0.0.1',
+            userAgent: 'PatientPortal/1.0',
+            reason: `Card shows ${patient.cardConditions.length} condition(s), ${patient.cardMedicationIds.length} medication(s), recent diagnosis ${patient.cardIncludeRecentDiagnosis ? 'on' : 'off'}`,
+          });
+        }
         patient.updatedAt = new Date().toISOString();
-        ctx.auditManager.appendEntry({
-          actorId: patient.id,
-          subjectId: patient.id,
-          action: 'PATIENT_UPDATED_PUBLIC_BADGE_SETTING',
-          accessType: 'NORMAL_CONSENT',
-          ipAddress: '127.0.0.1',
-          userAgent: 'PatientPortal/1.0',
-          reason: `Public emergency badge ${patient.publicEmergencyOptIn ? 'enabled' : 'disabled'} by patient`,
-        });
         return { patient: profileOf(patient) };
+      }
+
+      if (method === 'POST' && sub === 'offline-card') {
+        const issued = ctx.offlineCards.issue(patient, {
+          recentDiagnosis: patient.cardIncludeRecentDiagnosis ? latestDiagnosis(patient) : null,
+        });
+        return {
+          token: issued.token,
+          version: issued.card.version,
+          kid: issued.card.kid,
+          issuedAt: issued.card.issuedAt,
+          expiresAt: issued.card.expiresAt,
+          warnings: issued.warnings,
+          payload: issued.payload,
+        };
+      }
+
+      if (method === 'GET' && sub === 'offline-cards') {
+        return { cards: ctx.offlineCards.list(patient.id) };
       }
 
       if (method === 'GET' && sub === 'timeline') {

@@ -18,6 +18,8 @@ import { EmergencyBreakGlassEngine } from './lib/emergency/breakGlassEngine.ts';
 import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { getPublicJwks } from './lib/crypto/cardKeys.ts';
+import { OfflineCardStore } from './lib/emergency/offlineCardStore.ts';
+import { cardValidityDays } from './lib/emergency/cardPayload.ts';
 import { generateWalletCardSvg, generateWristbandSvg } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
@@ -42,7 +44,7 @@ const consoleProvider = new ConsoleNotificationProvider();
 const dispatcher = new NotificationDispatcher(consoleProvider);
 const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
 const offlineCardManager = new OfflineEmergencyCardManager();
-const OFFLINE_CARD_VALIDITY_DAYS = Math.max(1, parseInt(process.env.OFFLINE_CARD_VALIDITY_DAYS || '30', 10) || 30);
+const offlineCardStore = new OfflineCardStore(auditManager);
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -90,6 +92,7 @@ const handlePortalApi = createPortalApi({
   accessLogManager,
   emergencyEngine,
   notifications: consoleProvider,
+  offlineCards: offlineCardStore,
   dataDir: path.join(ROOT_DIR, 'data'),
 });
 
@@ -374,7 +377,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', OFFLINE_CARD_VALIDITY_DAYS);
+      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', cardValidityDays());
       sendHtml(
         res,
         200,

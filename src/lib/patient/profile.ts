@@ -81,6 +81,7 @@ export interface PatientAllergy {
 }
 
 export interface ActiveMedication {
+  id: string;         // Stable per-patient id; patients pick medications for their offline card by id
   medicationName: string;
   dose: string;
   route: string;
@@ -122,10 +123,34 @@ export interface PatientEntity {
   allergies: PatientAllergy[];
   chronicConditions: string[];
   activeMedications: ActiveMedication[];
-  
+
+  // Offline emergency card visibility (patient-chosen). These only select which existing items are
+  // shown on the card; they never create or change clinical content.
+  cardConditions: string[];          // subset of chronicConditions
+  cardMedicationIds: string[];       // subset of activeMedications[].id
+  cardIncludeRecentDiagnosis: boolean;
+  cardVersion: number;               // version of the latest issued card (0 = none issued)
+
   activeEmergencyCodeId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Gives each medication a stable id (deterministic from its fields, so seeded ids survive restarts).
+ */
+function withMedicationIds(meds: Array<Omit<ActiveMedication, 'id'> & { id?: string }>): ActiveMedication[] {
+  const used = new Set<string>();
+  return meds.map((m) => {
+    let id = m.id;
+    if (!id) {
+      const base = crypto.createHash('sha256').update(`${m.medicationName}|${m.dose}|${m.route}|${m.sinceDate}`).digest('hex').slice(0, 12);
+      id = `med-${base}`;
+      for (let n = 2; used.has(id); n++) id = `med-${base}-${n}`;
+    }
+    used.add(id);
+    return { ...m, id };
+  });
 }
 
 /**
@@ -142,7 +167,10 @@ export function createPatientRecord(
     emergencyContacts?: EmergencyContact[];
     allergies?: PatientAllergy[];
     chronicConditions?: string[];
-    activeMedications?: ActiveMedication[];
+    activeMedications?: Array<Omit<ActiveMedication, 'id'> & { id?: string }>;
+    cardConditions?: string[];
+    cardMedicationIds?: string[];
+    cardIncludeRecentDiagnosis?: boolean;
   },
   meta: { userId: string; countryCode?: string; primaryFacilityId?: string; id?: string }
 ): PatientEntity {
@@ -172,7 +200,11 @@ export function createPatientRecord(
     emergencyContacts: triageData.emergencyContacts || [],
     allergies: triageData.allergies || [],
     chronicConditions: triageData.chronicConditions || [],
-    activeMedications: triageData.activeMedications || [],
+    activeMedications: withMedicationIds(triageData.activeMedications || []),
+    cardConditions: triageData.cardConditions || [],
+    cardMedicationIds: triageData.cardMedicationIds || [],
+    cardIncludeRecentDiagnosis: triageData.cardIncludeRecentDiagnosis || false,
+    cardVersion: 0,
 
     createdAt: now,
     updatedAt: now,

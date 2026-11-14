@@ -9,6 +9,7 @@ export type PolicyAction =
   | 'PATIENT_READ_RECORD'
   | 'PATIENT_WRITE_RECORD'
   | 'PATIENT_EXPORT_ALL'
+  | 'PATIENT_SET_CARD_VISIBILITY' // choose which existing items appear on the offline card (no clinical writes)
   | 'EMERGENCY_BREAK_GLASS'
   | 'EMERGENCY_READ_SUMMARY'
   | 'EMERGENCY_READ_FULL_HISTORY'
@@ -79,6 +80,14 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
         return { allowed: true, statusCode: 200, reason: 'Patient accessing own health record' };
       }
       return { allowed: false, statusCode: 403, reason: 'Patients cannot access records belonging to others' };
+    }
+
+    // Visibility only: selects existing items for the offline card. PATIENT_WRITE_RECORD stays denied.
+    if (action === 'PATIENT_SET_CARD_VISIBILITY') {
+      if (targetPatientId && targetPatientId === actor.userId) {
+        return { allowed: true, statusCode: 200, reason: 'Patient choosing offline card visibility for own record' };
+      }
+      return { allowed: false, statusCode: 403, reason: 'Cannot change card visibility for other patients' };
     }
 
     if (action === 'CONSENT_GRANT_OR_REVOKE') {
