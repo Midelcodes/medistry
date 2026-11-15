@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Medistry triage MCP server (team-built). Stdio transport.
 // Tools: score_triage_priority, flag_deterioration, queue_add_patient, queue_get, queue_call_next,
-//        route_referral, get_emergency_summary (reads Medistry through its audited break-glass API).
+//        route_referral, get_emergency_summary (reads Medistry through its audited break-glass API),
+//        verify_offline_card (verifies a signed offline card locally; only the public keys are fetched).
 // Data residency: the only network call is to MEDISTRY_URL, and only to hosts in MEDISTRY_ALLOWED_HOSTS
 // (default localhost). Queues are in-process memory and use pseudonymous patient references.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,6 +11,7 @@ import { z } from "zod";
 import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_SIGNS } from "./tews.js";
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
 import { emergencySummary } from "./medistry-client.js";
+import { verifyOfflineCard } from "./offline-card.js";
 
 const obs = {
   mobility: z.enum(["walking", "with_help", "immobile"]),
@@ -131,6 +133,15 @@ server.registerTool("get_emergency_summary", {
   },
 }, async ({ code, reason }) => {
   try { return ok(await emergencySummary({ code, reason })); }
+  catch (e) { return err(e.message); }
+});
+
+server.registerTool("verify_offline_card", {
+  title: "Verify an offline Medistry emergency card",
+  description: "Verifies the ES256 signature of an offline Medistry card (the token, or the full card link .../s#token) using public keys fetched only from MEDISTRY_URL (allowlisted hosts). Returns a minimised triage view: blood group, genotype, allergies, DNR, conditions, medications, recent diagnosis, card version, verified, expired. Never returns the emergency contact or the patient id. If verified is false, no medical data is returned and the card must not be used.",
+  inputSchema: { token: z.string().min(20).max(6000).describe("Card token or the card link ${APP_URL}/s#<token>") },
+}, async ({ token }) => {
+  try { return ok(await verifyOfflineCard(token)); }
   catch (e) { return err(e.message); }
 });
 

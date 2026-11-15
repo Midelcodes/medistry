@@ -67,7 +67,9 @@ test("loop executes tool calls, feeds results back and stops at final text", asy
     assert.match(requests[0].config.systemInstruction, rule);
   }
   assert.equal(requests[0].config.tools[0].functionDeclarations.length, (await mcp.listTools()).tools.length);
-  assert.equal(requests[0].contents[0].parts[0].text, DEFAULT_TASK);
+  // The model receives the minimised task: the patient reference is a placeholder, nothing else changes.
+  assert.equal(requests[0].contents[0].parts[0].text, DEFAULT_TASK.replace("PT-DEMO-01", "[REF_1]"));
+  assert.ok(!JSON.stringify(requests).includes("PT-DEMO-01"), "real patient reference never sent to the model");
 
   // Request 2: model's call replayed, then the real tool result as a function response.
   const [, modelTurn, toolTurn] = requests[1].contents;

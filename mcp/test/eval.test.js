@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const tasks = JSON.parse(readFileSync(new URL("../eval/tasks.json", import.meta.url)));
+// Tasks with a "kind" are multi-step flows that need a running Medistry; test/offline-card.test.js runs them.
+const tasks = JSON.parse(readFileSync(new URL("../eval/tasks.json", import.meta.url))).filter((t) => !t.kind);
 let client;
 before(async () => {
   client = new Client({ name: "eval", version: "0.2.0" });
@@ -17,7 +18,7 @@ test("server exposes >= 3 distinct tools including the three required kinds", as
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name);
   assert.ok(tools.length >= 3);
-  for (const n of ["score_triage_priority", "flag_deterioration", "route_referral", "get_emergency_summary"]) assert.ok(names.includes(n), n);
+  for (const n of ["score_triage_priority", "flag_deterioration", "route_referral", "get_emergency_summary", "verify_offline_card"]) assert.ok(names.includes(n), n);
 });
 
 for (const t of tasks) {
