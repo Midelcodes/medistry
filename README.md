@@ -55,6 +55,48 @@ queue management and in-country referral routing, plus a LangGraph demo. See [`m
 
 ---
 
+## Offline emergency card
+
+A credit-card-sized card whose QR code a clinician can verify with no internet. Synthetic data only.
+
+- **Signed, not encrypted.** The QR holds `${APP_URL}/s#<token>`, an ES256-signed (ECDSA P-256) token. Scanners
+  verify it with Medistry's public keys (`/.well-known/medistry-keys.json`), which cannot be used to forge cards.
+  Anyone who decodes the QR can read it, so patient opt-in is the privacy control.
+- **Patient-chosen content.** Core fields (blood group, genotype, severe allergies, DNR, organ donor, one emergency
+  contact) are always on the card; conditions, medications and the recent diagnosis appear only if the patient
+  opts each one in. The card back prints the core fields; the patient can print, download, reissue or revoke it
+  in the portal (Patients → Emergency kit → My emergency card).
+- **Works offline.** The scanner at `/s` caches itself with a service worker after one online visit and verifies
+  cards with WebCrypto on the device. It shows GENUINE, NOT GENUINE (no data), EXPIRED (marked unverified-current)
+  or "connect once to update keys".
+- **Accountable scans.** A clinician who signs in on the scanner gets a 7-day pass bound to a non-extractable
+  device key. Opt-in fields need a reason, which creates a signed scan event; events upload when online, are
+  written to the audit chain and notify the patient, who can dispute them.
+- **Kept in step.** Doctor-signed record changes mark the card stale and remove discontinued opt-ins; drafts by
+  nurses or records officers never reach the card. The MCP tool `verify_offline_card` lets the triage agent use a
+  card (see `mcp/README.md`).
+
+Generate the signing key once per environment and store it as a secret (never commit it):
+
+```bash
+node scripts/gen-card-key.mjs
+# prints OFFLINE_CARD_PRIVATE_KEY=<base64 PKCS8> on stdout; the key id and public key go to stderr
+```
+
+| Variable | Purpose |
+|---|---|
+| `OFFLINE_CARD_PRIVATE_KEY` | ES256 signing key (PKCS8 as PEM, base64 PEM or base64 DER). Required when `NODE_ENV=production` and `DEMO_MODE=0` (the server refuses to start without it). Blank in dev: a random per-process key, so cards stop verifying after a restart. |
+| `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS` | Optional, comma-separated SPKI public keys still accepted during a **planned** rotation. Never list a compromised key. |
+| `OFFLINE_CARD_VALIDITY_DAYS` | Card lifetime in days (default 180). |
+| `APP_URL` | Public base URL printed in QR codes. Set it in every deployment; otherwise the request's own host is used. |
+| `DEPLOYMENT_COUNTRY` | Country this deployment serves (`NG` default, `KE` supported); default for new patients and records. |
+| `OFFLINE_CARD_SIGNING_KEY` | Deprecated and ignored (old HMAC cards). |
+
+Testing: `docs/OFFLINE_CARD_TESTING.md` (manual airplane-mode checklist). Risks and limits: `docs/THREAT_MODEL.md`
+section 3. Data protection design and open TODOs: `docs/COMPLIANCE.md` sections 4 to 7.
+
+---
+
 ## 🏗️ Technology Stack
 
 | Component | Technology | Rationale |

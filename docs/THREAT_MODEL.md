@@ -164,14 +164,29 @@ everything in it, including any conditions, medicines or recent diagnosis the pa
 - **In-memory build:** card rows, device-key bindings, passes and scan events are lost on restart in this
   build. `prisma/schema.prisma` has the persistent design (`OfflineCard`, `ClinicianDeviceKey`,
   `OfflineScanEvent`), which is not wired yet.
-- **Key compromise:** a leaked signing key lets an attacker forge cards and passes. Rotate it with
-  `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS` for a transition, then remove the old key. Scanners pick up the
-  change only when they come online.
+- **Key compromise:** a leaked signing key lets an attacker forge cards and passes. See the scenario below:
+  a compromised key is removed at once; `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS` is only for planned rotation.
 - **Notifications** use a console provider in the demo; real SMS or push delivery is not wired.
+
+### Scenarios
+
+| Scenario | What the attacker or mistake achieves | Mitigation in this build | What remains |
+|---|---|---|---|
+| **Lost card** | The finder can read the printed core fields and decode the QR, including any opted-in items. | Patient portal "Report lost card" revokes the current card (`OFFLINE_CARD_REVOKED` in the audit chain) and requires a reissue. Scanners receive `cardStatus: revoked` on their next sync and then show a banner when that card is scanned again. Patients choose what goes in the QR. | The data on the lost card is already exposed. An offline scanner that has not synced still shows the revoked card as genuine until its expiry (`OFFLINE_CARD_VALIDITY_DAYS`). |
+| **Forged card** | Someone prints a card with false data (for example a wrong blood group). | Every card is ES256-signed by the server; scanners hold only public keys and verify on the device. Any change shows a full red "CARD NOT GENUINE" screen with no data. Only `ES256` with a known key id is accepted, which blocks `alg: none` and HS256 confusion. | A *copy* of a genuine card still verifies. The printed text on the back is not signed, so clinicians should trust the scanner result over the printed text when they differ. |
+| **Stolen phone with a clinician pass** | The thief opens opt-in fields and creates scan events in the clinician's name. | The pass is bound to a non-extractable device key; a copied pass alone cannot sign events. The pass expires after 7 days. Suspending the clinician (status SUSPENDED; there is no admin UI for this yet) makes the server reject all their uploads; each scan names the device thumbprint. | Until the pass expires, the stolen phone can show opt-in fields offline. Device-key revocation is not implemented (TODO). Phone lock and OS encryption are the first line of defence. |
+| **Replayed scan event** | An old event is uploaded again to repeat a notification or inflate the audit trail. | The eventId is idempotent: the same signed event returns `duplicate` and writes nothing. A reused eventId with different content is rejected. Scan time must be within 30 days and at most 5 minutes ahead; the pass must have been valid at scan time. | A device can create many genuine new events while its pass is valid; the per-IP upload limit (20 batches per minute) and the audit trail bound and expose this. |
+| **Malicious insider scanning** | A verified clinician scans a card without a clinical reason (curiosity, a relative, a celebrity). | Opt-in fields need a reason first; the signed event names the clinician, facility, licence country and device. On upload: an `OFFLINE_EMERGENCY_SCAN` audit entry, a push to the patient naming who, where, when and why, and a dispute flow in the portal (by event id). | The core fields are visible without a reason, as they are printed on the card. A modified client or any QR reader can read the QR without logging. Accountability relies on the patient seeing the notification and disputing. |
+| **Signing key compromise** | An attacker can mint cards and clinician passes that verify everywhere. | Remove the compromised key from the published key set immediately (do **not** list it in `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS`), generate a new key with `scripts/gen-card-key.mjs`, and ask every patient to reissue their card and every clinician to sign in again for a new pass. Scanners drop the old key when they next fetch the key set; cards then show "Cannot verify: connect once to update keys" until reissued. For a *planned* rotation, keep the old public key in `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS` until old cards expire. | Offline scanners that never reconnect keep trusting the old key. There is no push channel to scanners and no key-revocation list yet. The private key must live in a secret store (Railway/Vercel variables), never in the repository. |
 
 ### Open items
 
-- Device-key revocation and a revocation list that scanners can cache.
+- Device-key revocation and a revocation list that scanners can cache (cards, passes and compromised signing keys).
+- A cap on device keys per clinician (binding is rate-limited per IP, but not capped per clinician).
+- Cross-border scans between separate per-country deployments: scanners only trust their own deployment's keys,
+  and scan events would reach a deployment that does not know the patient. Needs a trusted key list and event routing.
+- Patient authentication for the portal. Its card endpoints are demo-only today (closed when `DEMO_MODE=0`);
+  when real patient sign-in is added, any cookie-based session must come with CSRF protection.
 - Persistent storage for cards, device keys and scan events.
 - Real notification delivery, and deciding whether emergency contacts should also be told about offline scans.
 - Legal review of what may be printed on a card and shown without authentication, under the Nigeria

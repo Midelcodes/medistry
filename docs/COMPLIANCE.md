@@ -24,6 +24,16 @@ MEDISTRY operates as a Data Controller and Processor under the provisions of the
 | **Section 39** | Security of Processing & Technical Safeguards | Argon2id/scrypt memory-hard password hashing, mandatory RFC 6238 TOTP MFA for clinicians, 15-minute clinician session timeouts, and SHA-256 hash-chained audit trails. |
 | **Section 41 & 42** | Cross-Border Data Transfer Restrictions | Single-region in-country data residency (`DEPLOYMENT_COUNTRY=NG`). All primary databases, logs, and cryptographic keys reside in the authorized regional zone. |
 
+> [!WARNING]
+> **Review notes added on the offline-card branch (not legal advice):**
+> - The **Data Minimization** row describes the online code card, wristband and NFC tag. It is **not true for
+>   the offline emergency card**, which prints core fields and carries a signed, unencrypted copy of them (plus
+>   any items the patient opted in) in its QR. See section 4.
+> - Some entries in this table have not been checked against the code or the Act on this branch: the section
+>   numbers; "Argon2id" (the code uses scrypt); the "PDF" summary (the code produces print-ready HTML);
+>   "key rotation" for field encryption (not found in the code); and SMS/push alerts (a console provider in
+>   the demo). Treat them as intended design until reviewed.
+
 ---
 
 ## 3. Clinician Licensing & Regulatory Oversight (MDCN)
@@ -33,3 +43,75 @@ In compliance with the **Medical and Dental Practitioners Act (Cap M8, LFN 2004)
 2. **Multi-Tenant Facility Affiliation**: Clinicians must be tied to verified healthcare facilities with verifiable operating permits.
 3. **Pluggable MDCN Registry**: Onboarding is governed by the `IMdcnRegistryAdapter` interface, enabling immediate manual registrar vetting and future automated live lookup against the MDCN electronic register.
 
+---
+
+## 4. Offline Emergency Card: Data Minimisation and Patient Opt-In
+
+Status: design and engineering only. **Compliance has not been assessed or achieved.**
+
+- **Core fields only by default.** A card always carries blood group, genotype, severe allergies, DNR flag,
+  organ-donor flag and one primary emergency contact, the minimum a clinician needs when the patient cannot speak.
+- **Everything else is opt-in, item by item.** Chronic conditions, medications and the most recent diagnosis
+  appear on the card only if the patient chooses each one in the portal. The portal warns that anyone who reads
+  the QR can see what is in it, and that conditions or medicines can reveal sensitive diagnoses.
+- **Signed, not encrypted.** The QR is signed (ES256) so it cannot be altered or forged, but it is not encrypted.
+  Patient opt-in is the real privacy control; the scanner's split between core and opt-in fields is a
+  presentation and audit boundary (see `docs/THREAT_MODEL.md`, section 3).
+- **Nothing extra in the card.** No name, date of birth, national ID, address or online emergency code is in the
+  QR. The patient id (`sub`) is present so that scans can be audited and disputed.
+- **Patients change visibility only.** They choose what is shown, and can revoke a lost card; they cannot write
+  clinical content. Clinician-signed record changes mark the card for review and remove discontinued opt-ins.
+- **Minimised downstream.** The MCP tool `verify_offline_card` returns no contact or patient id. The LLM agent
+  strips names, contacts, ids and free-text notes before anything is sent to a model.
+- **Audit and transparency.** Scans by clinicians with a pass become audit-chain entries; the patient is
+  notified and can dispute them. Offline scans are recorded on upload, so this is best effort (see the threat model).
+
+## 5. Per-Country Deployment (Data Stays In-Country)
+
+- Each deployment serves one country (`DEPLOYMENT_COUNTRY`, for example `NG` or `KE`). New patients and records
+  take that country by default, and `/api/health` reports the country and its medical regulator.
+- The intended model is **one deployment per country, hosted in that country**, with its own database, keys and
+  logs. There is no server-to-server replication between countries in this codebase.
+- The MCP triage server only contacts `MEDISTRY_URL`, and refuses any host not in `MEDISTRY_ALLOWED_HOSTS`.
+- The public demo is hosted outside Nigeria and Kenya and uses synthetic data only. A real deployment needs an
+  in-country region; this has not been set up.
+- The Gemini agent is a demo. Real patient data must not be sent to a foreign-hosted LLM without a lawful basis;
+  production should use an in-country or self-hosted model.
+
+## 6. Cross-Border Model: Patient-Carried Card
+
+- Emergencies cross borders. A clinician licensed in one country (for example a KMPDC demo clinician in Kenya)
+  may scan a card issued in another (for example Nigeria). The scanner verifies the card **on the device**,
+  using public keys it has already cached.
+- **No server-to-server transfer of patient data takes place.** The data travels with the patient, on the card
+  they carry and chose to fill. The scanning clinician's server receives only the scan event (card subject,
+  version and key id, plus the clinician, reason and time) when the clinician's device uploads it to the
+  deployment that issued the pass. Each scan event records both countries (`clinicianCountry`, `cardCountry`).
+- Whether a cross-border scan event itself is a regulated transfer, and which country's law governs it, has not
+  been assessed (see the TODO list).
+- **Limit of this build:** the demo runs both countries in one deployment, so cross-border scans work there. With
+  one deployment per country they would not yet: a scanner fetches public keys only from its own deployment, so
+  it would not have another country's keys, and its scan upload would go to a deployment that does not know the
+  patient. A trusted list of other deployments' public keys, and a way to route scan events to the issuing
+  country without moving patient records, still need to be designed.
+
+## 7. TODO Before Any Real Deployment
+
+These are open. None of them has been done.
+
+- [ ] Register with the **Nigeria Data Protection Commission (NDPC)** as required for the controller or processor
+      role Medistry takes in Nigeria.
+- [ ] Register with Kenya's **Office of the Data Protection Commissioner (ODPC)** as required under the Kenya
+      Data Protection Act 2019.
+- [ ] Complete a **Data Protection Impact Assessment (DPIA)** covering the offline card, the scanner, clinician
+      passes and device keys, offline scan events, the MCP tools and the LLM agent.
+- [ ] Confirm the **KMPDC** licence number format and an online register lookup (the code accepts a generic
+      format and uses a manual demo list; see `src/lib/clinician/verification.ts`).
+- [ ] Confirm the **Kenya Digital Health Agency (DHA)** solution-registration requirements for a digital health
+      product, and register if required.
+- [ ] Confirm the MDCN licence number format and register lookup (the current format check is unverified).
+- [ ] Legal review of what may be printed on a card and shown without authentication, the lawful basis for
+      processing, and cross-border scan events.
+- [ ] Design cross-deployment trust for cross-border scans: distribution of other countries' public keys to
+      scanners, and routing of scan events to the issuing country.
+- [ ] Verify the section references and the controls in the mapping table above.

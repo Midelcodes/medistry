@@ -67,6 +67,14 @@ export function createPortalApi(ctx: PortalContext) {
   // a random per-process key is used instead (see security/config.ts), never a key from this repo.
   const serverKey = appSecret('JWT_SECRET');
   const loginLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 10 });
+  // Offline card endpoints (on top of the server-wide limiter). Signing, verification and device-key
+  // binding cost CPU and write audit entries, so each has its own per-IP budget.
+  const cardLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 30 });       // card issue/view/revoke, settings, flags
+  const deviceKeyLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 10 });  // device-key binding
+  const scanUploadLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 }); // offline-scan batches (up to 50 events each)
+  const limit = (limiter: SlidingWindowRateLimiter, req: http.IncomingMessage) => {
+    if (!limiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many requests. Wait a minute and try again.');
+  };
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   const hmac = (label: string) => crypto.createHmac('sha256', serverKey).update(label).digest();
   const totpSecrets = new Map<string, string>();
@@ -363,6 +371,7 @@ export function createPortalApi(ctx: PortalContext) {
       if (method === 'GET' && sub === '') return { patient: profileOf(patient) };
 
       if (method === 'PATCH' && sub === 'settings') {
+        limit(cardLimiter, req);
         // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
         const body = await readBody(req);
         const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis', 'preferredLocale'];
@@ -422,15 +431,18 @@ export function createPortalApi(ctx: PortalContext) {
 
       // GET: current card (issues the first one if none is valid). POST: reissue, superseding the old card.
       if ((method === 'GET' || method === 'POST') && sub === 'offline-card') {
+        limit(cardLimiter, req);
         return offlineCardFor(patient, req, method === 'POST', url.searchParams.get('lang'));
       }
 
       if (method === 'GET' && sub === 'offline-cards') {
+        limit(cardLimiter, req);
         return { cards: ctx.offlineCards.list(patient.id) };
       }
 
       // Lost or stolen card: revoke it. Scanners learn of it on their next sync (cardStatus 'revoked').
       if (method === 'POST' && sub === 'offline-card/revoke') {
+        limit(cardLimiter, req);
         const body = await readBody(req);
         const reason = text(body.reason, 200);
         if (reason.length < 2) throw new HttpError(400, 'Give a short reason, for example "lost"');
@@ -442,6 +454,7 @@ export function createPortalApi(ctx: PortalContext) {
 
       // Patient flags a record as possibly wrong. The record is not changed; its author is notified.
       if (method === 'POST' && (m = sub.match(/^records\/([^/]+)\/flag$/))) {
+        limit(cardLimiter, req);
         const body = await readBody(req);
         try {
           return { flag: ctx.recordFlags.flag(patient.id, decodeURIComponent(m[1]), text(body.note, 1000)) };
@@ -583,6 +596,7 @@ export function createPortalApi(ctx: PortalContext) {
       // Optional: a scanner device sends its public key to get a 7-day offline pass bound to that key.
       let offline: Record<string, string> = {};
       if (body.devicePublicJwk !== undefined) {
+        limit(deviceKeyLimiter, req);
         let thumbprint: string;
         try {
           thumbprint = ctx.offlineScans.bindDeviceKey(clinician.id, body.devicePublicJwk);
@@ -612,6 +626,7 @@ export function createPortalApi(ctx: PortalContext) {
     // Offline scan events. No session needed: each event carries a server-signed pass and is signed by the
     // device key bound into that pass, so the upload is authenticated per event.
     if (method === 'POST' && pathname === '/api/emergency/offline-scans') {
+      limit(scanUploadLimiter, req);
       const body = await readBody(req, 512 * 1024);
       let results;
       try {
@@ -654,10 +669,12 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
 
     if (method === 'GET' && pathname === '/api/clinician/record-flags') {
+      limit(cardLimiter, req);
       return { flags: ctx.recordFlags.forAuthor(clinician.id) };
     }
 
     if (method === 'POST' && pathname === '/api/clinician/device-key') {
+      limit(deviceKeyLimiter, req);
       const body = await readBody(req);
       let thumbprint: string;
       try {

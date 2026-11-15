@@ -429,7 +429,7 @@ const server = http.createServer(async (req, res) => {
         const html = renderEmergencySummaryHtml(summaryData);
         sendHtml(res, 200, html);
       } catch (err: any) {
-        sendHtml(res, 400, `<h1>Error generating emergency summary: ${err.message}</h1>`);
+        sendHtml(res, 400, `<h1>Error generating emergency summary: ${escapeHtml(err?.message || 'unknown error')}</h1>`);
       }
       return;
     }
@@ -515,6 +515,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥  Health Check:     http://localhost:${PORT}/api/health`);
   console.log(`👥  Patients List:    http://localhost:${PORT}/api/patients`);
   console.log(`🚨  Emergency Demo:   http://localhost:${PORT}/e/${seedData.patients[0].emergencyCode.formattedCode}`);
-  console.log(`🫀  Priority Patient: Amara Okonkwo (HbSS Sickle Cell, Penicillin Allergy)`);
+  console.log(`🫀  Priority synthetic patient: open the Emergency Demo link (no patient details are logged)`);
   console.log(`======================================================\n`);
 });
