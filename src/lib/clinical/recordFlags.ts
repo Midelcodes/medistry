@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import type { ClinicalDataStore } from './store.ts';
 import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
+import type { RecordRepo } from '../data/repositories.ts';
 
 export interface RecordFlag {
   id: string;
@@ -22,6 +23,13 @@ export interface RecordFlag {
 
 export class RecordFlagStore {
   private flags = new Map<string, RecordFlag>();
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: Pick<RecordRepo, 'saveRecordFlag'>;
+
+  /** Rebuilds flags from storage (start-up). */
+  hydrate(flags: RecordFlag[]): void {
+    for (const f of flags) this.flags.set(f.id, f);
+  }
   private deps: { clinicalStore: ClinicalDataStore; auditManager: AuditChainManager; dispatcher: NotificationDispatcher };
 
   constructor(deps: { clinicalStore: ClinicalDataStore; auditManager: AuditChainManager; dispatcher: NotificationDispatcher }) {
@@ -46,6 +54,7 @@ export class RecordFlagStore {
       status: 'OPEN',
     };
     this.flags.set(flag.id, flag);
+    this.persistence?.saveRecordFlag(flag);
 
     // The patient's note is not copied into the audit trail; the flag itself holds it.
     this.deps.auditManager.appendEntry({

@@ -520,13 +520,4 @@ export function generateSeedData(): SeedDatabasePayload {
   };
 }
 
-// When executed directly in node / ts-node
-if (process.argv[1]?.endsWith('seed.ts')) {
-  const seedData = generateSeedData();
-  console.log(`✅ Generated MEDISTRY Synthetic Database:`);
-  console.log(`   • Facilities: ${seedData.facilities.length} (${seedData.facilities.filter((f) => f.countryCode === 'KE').length} synthetic Kenyan)`);
-  console.log(`   • Clinicians: ${seedData.clinicians.length}`);
-  console.log(`   • Synthetic Patients: ${seedData.patients.length}`);
-  console.log(`   • Priority Patient: ${seedData.patients[0].patient.id} (Sickle Cell SS, Penicillin Anaphylaxis)`);
-}
-
+// The `npm run seed` command lives in scripts/seed.ts (it imports the runtime, which imports this module).

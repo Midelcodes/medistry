@@ -8,7 +8,7 @@
 
 ## Status and known limits
 
-- **Runtime is in memory.** `npm start` seeds synthetic data and keeps all state in process memory; it resets on restart. PostgreSQL, Redis and Prisma (`prisma/schema.prisma`, `docker-compose.yml`) are the production target and are not wired into the running server yet.
+- **Storage.** By default `npm start` seeds synthetic data in memory and resets on restart. With `STORAGE=postgres` and `DATABASE_URL`, every change is written through to PostgreSQL (Prisma) and the server rebuilds its state from the database at start-up (see "PostgreSQL storage" below). One app instance per database: the in-memory working set is not shared between instances. Redis is not used yet.
 - **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. Set `DEMO_MODE=0` to disable them. Patient sign-in is not implemented, so do not run real data on this build.
 - **Secrets.** `JWT_SECRET` and `FIELD_ENCRYPTION_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used. `OFFLINE_CARD_PRIVATE_KEY` (ES256 card signing key) comes from `node scripts/gen-card-key.mjs`; without it a random per-process key is used in dev, and the server refuses to start in production with `DEMO_MODE=0`.
 - **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
@@ -146,18 +146,34 @@ Key configuration values in `.env`:
 - `OFFLINE_CARD_PRIVATE_KEY`: ES256 private key for offline emergency cards (`node scripts/gen-card-key.mjs`). `OFFLINE_CARD_SIGNING_KEY` is deprecated and ignored.
 - `DEPLOYMENT_COUNTRY`: `NG` (Single-region residency).
 
-### 3. Start Database and Redis Services
-Launch the PostgreSQL and Redis containers with Docker Compose:
-```bash
-docker compose up -d
-```
+### 3. Run with PostgreSQL (optional)
+The default needs no database. To keep data across restarts, use PostgreSQL through Prisma:
 
-### 4. Install Dependencies & Seed Synthetic Database
 ```bash
 npm install
+cp .env.example .env              # then fill in the three secrets below
+#   FIELD_ENCRYPTION_KEY=$(openssl rand -hex 32)
+#   JWT_SECRET=$(openssl rand -hex 32)
+#   OFFLINE_CARD_PRIVATE_KEY from: node scripts/gen-card-key.mjs
+docker compose up -d && STORAGE=postgres npm run seed && STORAGE=postgres npm start
+```
+
+- `npm start` and `npm run seed` read `.env` if it exists; real environment variables win over it.
+- `npm run seed` applies pending migrations (`prisma migrate deploy`), then writes the synthetic dataset. If the
+  database already has patients it writes nothing; `SEED_RESET=1` wipes and reseeds (demo only). It refuses to
+  run when `DEMO_MODE=0`, so fake patients can never be seeded into a real deployment.
+- With `STORAGE=postgres` the server refuses to start without the three secrets (data encrypted with a random
+  key could not be read after a restart), on an empty database, or if the stored audit chain does not verify.
+- Health, contact and free-text data are encrypted in the application (AES-256-GCM) before they reach the
+  database, as the demographic fields always were. See the comments in `prisma/schema.prisma`.
+- Audit appends are serialised in the database (a table lock inside a transaction), so the hash chain cannot fork.
+- Limit: run one app instance per database. Serverless or multi-instance hosting is not supported yet.
+
+### 4. Seed Synthetic Data
+```bash
 npm run seed
 ```
-The seed script populates the database with:
+Without `STORAGE=postgres` this only prints a summary; the server seeds memory itself. The synthetic dataset contains:
 - **3 Nigerian facilities**: Lagos University Teaching Hospital (LUTH), National Hospital Abuja, Aminu Kano Teaching Hospital.
 - **2 synthetic Kenyan facilities** in Nairobi (not real; `DEMO-KMFL-` registry codes are not real Kenya Master Facility List codes).
 - **6 synthetic Nigerian clinicians (licence-checked in the demo)**: Surgeons, hematologists, emergency medicine specialists, and intensivists.
@@ -168,7 +184,9 @@ The seed script populates the database with:
 ```bash
 npm test
 ```
-Executes all **72 automated tests** across all 7 architectural phases:
+Runs the whole suite (unit, integration and the offline-card phases) with memory storage; no database needed.
+`tests/postgres-storage.test.ts` runs only with `STORAGE=postgres` and `DATABASE_URL` (the CI postgres job).
+The original suite covers the first 7 architectural phases:
 - Auth, RBAC & ReBAC Policy, Clinician Verification, Hash-Chain Audit (16 tests)
 - Crockford Base32 Code Generation, Field Encryption, Code Reissuance, Deliverables (14 tests)
 - FHIR R4 Clinical Store, Versioning, Timeline Aggregator, Document Antivirus Scanner (10 tests)

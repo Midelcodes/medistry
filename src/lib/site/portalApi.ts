@@ -30,6 +30,7 @@ import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import type { OfflineScanService } from '../emergency/offlineScans.ts';
 import type { RecordFlagStore } from '../clinical/recordFlags.ts';
+import type { Persistence } from '../data/repositories.ts';
 import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
 
 export interface PortalContext {
@@ -47,6 +48,7 @@ export interface PortalContext {
   offlineCards: OfflineCardStore;
   offlineScans: OfflineScanService;
   recordFlags: RecordFlagStore;
+  persistence?: Persistence;
   dataDir: string;
 }
 
@@ -424,6 +426,7 @@ export function createPortalApi(ctx: PortalContext) {
           });
         }
         patient.updatedAt = new Date().toISOString();
+        ctx.persistence?.savePatient(patient);
         return { patient: profileOf(patient) };
       }
 
@@ -534,6 +537,10 @@ export function createPortalApi(ctx: PortalContext) {
         ctx.patientsByCode.set(fresh.formattedCode, patient);
         ctx.codeByPatient.set(patient.id, { rawCode: fresh.rawCode, formattedCode: fresh.formattedCode });
         patient.activeEmergencyCodeId = fresh.rawCode;
+        const now = new Date().toISOString();
+        if (old) ctx.persistence?.saveEmergencyCode({ patientId: patient.id, ...old, isActive: false, createdAt: now, revokedAt: now, revocationReason: 'Reissued by patient' });
+        ctx.persistence?.saveEmergencyCode({ patientId: patient.id, rawCode: fresh.rawCode, formattedCode: fresh.formattedCode, isActive: true, createdAt: now });
+        ctx.persistence?.savePatient(patient);
         ctx.auditManager.appendEntry({
           actorId: patient.id,
           subjectId: patient.id,

@@ -200,7 +200,7 @@ describe('6. Server under DEPLOYMENT_COUNTRY=KE', () => {
   const base = `http://localhost:${PORT}`;
   let server: ChildProcess;
   before(async () => {
-    server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], { env: { ...process.env, PORT: String(PORT), DEPLOYMENT_COUNTRY: 'KE' }, stdio: 'ignore' });
+    server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], { env: { ...process.env, STORAGE: 'memory', PORT: String(PORT), DEPLOYMENT_COUNTRY: 'KE' }, stdio: 'ignore' });
     for (let i = 0; i < 50; i++) {
       try { if ((await fetch(`${base}/api/health`)).ok) return; } catch { /* starting */ }
       await new Promise((r) => setTimeout(r, 200));

@@ -12,6 +12,7 @@ import { AuditChainManager } from '../audit/hashChain.ts';
 import { NotificationDispatcher, type DispatchedAlertResult } from '../notifications/dispatcher.ts';
 import type { ActorContext, EmergencyGrantContext } from '../policy/enforcer.ts';
 import { recentEncounters as signedRecentEncounters } from '../clinical/encounters.ts';
+import type { EmergencyGrantRepo } from '../data/repositories.ts';
 
 export type BreakGlassReason = 'UNCONSCIOUS' | 'LIFE_THREATENING' | 'PATIENT_UNABLE_TO_CONSENT' | 'OTHER';
 
@@ -70,6 +71,7 @@ export interface StoredEmergencyGrant extends EmergencyGrantContext {
   isDisputed: boolean;
   disputeReason?: string;
   coSignDoctorName?: string;
+  coSignReason?: string;
 }
 
 export class EmergencyBreakGlassEngine {
@@ -79,6 +81,16 @@ export class EmergencyBreakGlassEngine {
   private clinicalStore: ClinicalDataStore;
   private timelineEngine: ClinicalTimelineEngine;
   private dispatcher: NotificationDispatcher;
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: Pick<EmergencyGrantRepo, 'saveEmergencyGrant'>;
+
+  /** Rebuilds grants from storage (start-up). */
+  hydrate(grants: StoredEmergencyGrant[]): void {
+    for (const g of [...grants].sort((a, b) => a.grantedAt.localeCompare(b.grantedAt))) {
+      this.grants.set(g.id, g);
+      this.activePatientGrants.set(g.patientId, g.id);
+    }
+  }
 
   constructor(
     auditManager: AuditChainManager,
@@ -184,6 +196,7 @@ export class EmergencyBreakGlassEngine {
 
     this.grants.set(grantId, grant);
     this.activePatientGrants.set(patient.id, grantId);
+    this.persistence?.saveEmergencyGrant(grant);
 
     // Append immutable audit row
     this.auditManager.appendEntry({
@@ -314,6 +327,7 @@ export class EmergencyBreakGlassEngine {
     grant.coSignClinicianId = coSignClinicianId;
     grant.coSignDoctorName = coSignDoctorName;
     grant.coSignReason = coSignReason;
+    this.persistence?.saveEmergencyGrant(grant);
 
     // Append immutable audit entry
     this.auditManager.appendEntry({

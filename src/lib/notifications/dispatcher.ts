@@ -3,6 +3,7 @@
  * Dispatches instant emergency break-glass alerts via SMS, Email, and Push
  * with automatic graceful degradation if SMS providers encounter outages.
  */
+import type { NotificationRepo, NotificationEntity } from '../data/repositories.ts';
 
 export interface NotificationMessage {
   toPhone?: string;
@@ -26,22 +27,36 @@ export class ConsoleNotificationProvider implements INotificationProvider {
   public sentEmailLogs: Array<{ to: string; subject: string; body: string }> = [];
   public sentPushLogs: Array<{ toUserId: string; title: string; body: string }> = [];
   public forceSmsFailure = false; // For testing graceful degradation
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: NotificationRepo;
+
+  /** Restores sent-message logs from storage (start-up), in order. */
+  hydrate(entries: NotificationEntity[]): void {
+    for (const n of entries) {
+      if (n.channel === 'SMS') this.sentSmsLogs.push({ to: n.to, message: n.body });
+      else if (n.channel === 'EMAIL') this.sentEmailLogs.push({ to: n.to, subject: n.title || '', body: n.body });
+      else this.sentPushLogs.push({ toUserId: n.to, title: n.title || '', body: n.body });
+    }
+  }
 
   async sendSms(toPhone: string, message: string): Promise<boolean> {
     if (this.forceSmsFailure) {
       throw new Error('Telecom gateway timeout (MTN/Airtel SMS outage simulated)');
     }
     this.sentSmsLogs.push({ to: toPhone, message });
+    this.persistence?.saveNotification({ channel: 'SMS', to: toPhone, body: message });
     return true;
   }
 
   async sendEmail(toEmail: string, subject: string, body: string): Promise<boolean> {
     this.sentEmailLogs.push({ to: toEmail, subject, body });
+    this.persistence?.saveNotification({ channel: 'EMAIL', to: toEmail, title: subject, body });
     return true;
   }
 
   async sendPush(toUserId: string, title: string, body: string): Promise<boolean> {
     this.sentPushLogs.push({ toUserId, title, body });
+    this.persistence?.saveNotification({ channel: 'PUSH', to: toUserId, title, body });
     return true;
   }
 }

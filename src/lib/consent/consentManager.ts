@@ -9,6 +9,7 @@ import { hashEmergencyCode } from '../code/crockford.ts';
 import { decryptPatientDemographics, type PatientEntity } from '../patient/profile.ts';
 import { AuditChainManager } from '../audit/hashChain.ts';
 import type { ConsentContext } from '../policy/enforcer.ts';
+import type { ConsentRepo } from '../data/repositories.ts';
 
 export type ConsentDurationPreset = 'ONE_VISIT' | 'SEVEN_DAYS' | 'THIRTY_DAYS' | 'CUSTOM';
 
@@ -49,10 +50,24 @@ export interface PreSharedLinkToken {
 }
 
 export class ConsentLifecycleManager {
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: ConsentRepo;
+
   private pendingRequests = new Map<string, PendingAccessRequest>(); // Key: requestId
   private activeGrants = new Map<string, StoredConsentGrant>();        // Key: grantId
   private patientGrants = new Map<string, string[]>();                // Key: patientId -> grantId[]
   private auditManager: AuditChainManager;
+
+  /** Rebuilds requests and grants from storage (start-up). No audit entries, no writes. */
+  hydrate(requests: PendingAccessRequest[], grants: StoredConsentGrant[]): void {
+    for (const r of requests) this.pendingRequests.set(r.id, r);
+    for (const g of [...grants].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      this.activeGrants.set(g.id, g);
+      const list = this.patientGrants.get(g.patientId) || [];
+      list.push(g.id);
+      this.patientGrants.set(g.patientId, list);
+    }
+  }
 
   constructor(auditManager: AuditChainManager) {
     this.auditManager = auditManager;
@@ -160,6 +175,7 @@ export class ConsentLifecycleManager {
     };
 
     this.pendingRequests.set(requestId, pending);
+    this.persistence?.saveConsentRequest(pending);
 
     // Audit event
     this.auditManager.appendEntry({
@@ -219,6 +235,8 @@ export class ConsentLifecycleManager {
 
     request.status = 'APPROVED';
     this.activeGrants.set(grantId, grant);
+    this.persistence?.saveConsentRequest(request);
+    this.persistence?.saveConsentGrant(grant);
 
     const patientList = this.patientGrants.get(patientId) || [];
     patientList.push(grantId);
@@ -253,11 +271,13 @@ export class ConsentLifecycleManager {
     const now = Date.now();
     if (now > request.otpExpiresAt) {
       request.status = 'EXPIRED';
+      this.persistence?.saveConsentRequest(request);
       throw new Error('OTP has expired. Clinician must initiate a new access request.');
     }
 
     if (request.otpAttemptsRemaining <= 0) {
       request.status = 'REJECTED';
+      this.persistence?.saveConsentRequest(request);
       throw new Error('Too many failed OTP attempts. Request locked.');
     }
 
@@ -266,6 +286,7 @@ export class ConsentLifecycleManager {
 
     if (!isMatch) {
       request.otpAttemptsRemaining--;
+      this.persistence?.saveConsentRequest(request);
       throw new Error(`Invalid OTP. ${request.otpAttemptsRemaining} attempts remaining.`);
     }
 
@@ -290,6 +311,8 @@ export class ConsentLifecycleManager {
 
     request.status = 'APPROVED';
     this.activeGrants.set(grantId, grant);
+    this.persistence?.saveConsentRequest(request);
+    this.persistence?.saveConsentGrant(grant);
 
     const list = this.patientGrants.get(request.patientId) || [];
     list.push(grantId);
@@ -339,6 +362,7 @@ export class ConsentLifecycleManager {
     };
 
     this.activeGrants.set(grantId, grant);
+    this.persistence?.saveConsentGrant(grant);
     const list = this.patientGrants.get(patientId) || [];
     list.push(grantId);
     this.patientGrants.set(patientId, list);
@@ -387,6 +411,7 @@ export class ConsentLifecycleManager {
     grant.isRevoked = true;
     grant.revokedAt = now;
     grant.revocationReason = reason;
+    this.persistence?.saveConsentGrant(grant);
 
     this.auditManager.appendEntry({
       actorId: patientId,
@@ -446,7 +471,10 @@ export class ConsentLifecycleManager {
     const result: Array<Omit<PendingAccessRequest, 'hashedOtp'>> = [];
     for (const req of this.pendingRequests.values()) {
       if (req.patientId !== patientId) continue;
-      if (req.status === 'PENDING' && now > req.otpExpiresAt) req.status = 'EXPIRED';
+      if (req.status === 'PENDING' && now > req.otpExpiresAt) {
+        req.status = 'EXPIRED';
+        this.persistence?.saveConsentRequest(req);
+      }
       const { hashedOtp: _omit, ...safe } = req;
       result.push(safe);
     }
@@ -462,6 +490,7 @@ export class ConsentLifecycleManager {
     if (request.patientId !== patientId) throw new Error('Unauthorized: Patient does not own this access request');
     if (request.status !== 'PENDING') throw new Error(`Request is already ${request.status}`);
     request.status = 'REJECTED';
+    this.persistence?.saveConsentRequest(request);
     this.auditManager.appendEntry({
       actorId: patientId,
       subjectId: patientId,

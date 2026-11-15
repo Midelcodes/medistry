@@ -22,6 +22,7 @@ import type { SeedClinician, SeedFacility } from '../../../prisma/seed.ts';
 import type { OfflineCardStore } from './offlineCardStore.ts';
 import { eventSigningInput, SCAN_REASONS, MAX_BATCH } from '../../../site/js/lib/offlineScan.js';
 import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
+import type { OfflineScanRepo, DeviceKeyEntity } from '../data/repositories.ts';
 
 export const PASS_TYPE = 'clinician-pass';
 export const PASS_VALIDITY_SECONDS = 7 * 24 * 3600;
@@ -78,9 +79,17 @@ export class OfflineScanService {
   private deviceKeys = new Map<string, DeviceKeyRecord>(); // `${clinicianId}:${thumbprint}`
 
   private deps: OfflineScanDeps;
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: OfflineScanRepo;
 
   constructor(deps: OfflineScanDeps) {
     this.deps = deps;
+  }
+
+  /** Rebuilds scan events and device keys from storage (start-up). */
+  hydrate(events: OfflineScanEventRecord[], deviceKeys: DeviceKeyEntity[]): void {
+    for (const e of events) this.events.set(e.id, e);
+    for (const k of deviceKeys) this.deviceKeys.set(`${k.clinicianId}:${k.thumbprint}`, { ...k });
   }
 
   // ---------- Device keys and passes ----------
@@ -97,7 +106,9 @@ export class OfflineScanService {
     const thumbprint = jwkThumbprint(clean);
     const key = `${clinicianId}:${thumbprint}`;
     if (!this.deviceKeys.has(key)) {
-      this.deviceKeys.set(key, { clinicianId, thumbprint, publicJwk: clean, boundAt: new Date().toISOString() });
+      const record = { clinicianId, thumbprint, publicJwk: clean, boundAt: new Date().toISOString() };
+      this.deviceKeys.set(key, record);
+      this.persistence?.saveDeviceKey(record);
       this.deps.auditManager.appendEntry({
         actorId: this.clinician(clinicianId)?.userId || clinicianId,
         action: 'CLINICIAN_DEVICE_KEY_BOUND',
@@ -244,6 +255,7 @@ export class OfflineScanService {
       auditLogId: audit.id,
       deviceSig: e.deviceSig,
     });
+    this.persistence?.saveScanEvent(this.events.get(eventId)!);
 
     const locale: SupportedLocale = SUPPORTED_LOCALES.includes(patient.preferredLocale as SupportedLocale) ? patient.preferredLocale as SupportedLocale : 'en';
     const when = new Date(scannedMs).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
@@ -271,7 +283,10 @@ export class OfflineScanService {
 
   markDisputed(eventId: string): void {
     const ev = this.events.get(eventId);
-    if (ev) ev.status = 'DISPUTED';
+    if (ev) {
+      ev.status = 'DISPUTED';
+      this.persistence?.saveScanEvent(ev);
+    }
   }
 
   private clinician(id: string): SeedClinician | undefined {

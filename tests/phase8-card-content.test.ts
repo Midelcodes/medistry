@@ -249,7 +249,7 @@ describe('6. Patient portal API (end to end, demo mode)', () => {
   let conditions: string[] = [];
 
   before(async () => {
-    server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+    server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], { env: { ...process.env, STORAGE: 'memory', PORT: String(PORT) }, stdio: 'ignore' });
     for (let i = 0; i < 50; i++) {
       try { if ((await fetch(`${base}/api/health`)).ok) break; } catch { /* starting */ }
       await new Promise((r) => setTimeout(r, 200));

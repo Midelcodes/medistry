@@ -171,7 +171,7 @@ describe('3. Card API', () => {
 
   async function start(port: number, extraEnv: Record<string, string>) {
     const child = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], {
-      env: { ...process.env, PORT: String(port), APP_URL: BASE, ...extraEnv }, stdio: 'ignore',
+      env: { ...process.env, STORAGE: 'memory', PORT: String(port), APP_URL: BASE, ...extraEnv }, stdio: 'ignore',
     });
     for (let i = 0; i < 50; i++) {
       try { if ((await fetch(`http://localhost:${port}/api/health`)).ok) return child; } catch { /* starting */ }

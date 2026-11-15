@@ -9,6 +9,7 @@ import { encryptField, decryptField } from '../patient/profile.ts';
 import { evaluatePolicy, type ActorContext, type ConsentContext, type EmergencyGrantContext } from '../policy/enforcer.ts';
 import { AuditChainManager } from '../audit/hashChain.ts';
 import { deploymentCountry } from '../security/config.ts';
+import type { RecordRepo } from '../data/repositories.ts';
 import type {
   FHIREncounter,
   FHIRCondition,
@@ -75,9 +76,20 @@ export class ClinicalDataStore {
   private patientIndex = new Map<string, string[]>();         // Key: patientId -> recordId[]
   private auditManager: AuditChainManager;
   private finalListeners: Array<(event: FinalRecordEvent) => void> = [];
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: RecordRepo;
 
   constructor(auditManager: AuditChainManager) {
     this.auditManager = auditManager;
+  }
+
+  /** Rebuilds the working set from stored records (start-up). No audit entries, no listeners, no writes. */
+  hydrate(records: StoredClinicalRecord[]): void {
+    const ordered = [...records].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.versionId - b.versionId);
+    for (const r of ordered) {
+      this.records.set(r.id, r);
+      this.indexRecord(r.patientId, r.id);
+    }
   }
 
   /** Subscribes to doctor-signed records (used to keep the emergency card in step with the record). */
@@ -199,6 +211,7 @@ export class ClinicalDataStore {
 
     this.records.set(recordId, storedRecord);
     this.indexRecord(patientId, recordId);
+    this.persistence?.saveRecord(storedRecord);
 
     // D. Append immutable audit row
     this.auditManager.appendEntry({
@@ -293,6 +306,8 @@ export class ClinicalDataStore {
 
     this.records.set(newRecordId, newVersionRecord);
     this.indexRecord(existing.patientId, newRecordId);
+    this.persistence?.saveRecord(existing); // now isLatest = false
+    this.persistence?.saveRecord(newVersionRecord);
 
     // D. Log immutable audit entry for version update
     this.auditManager.appendEntry({
@@ -361,6 +376,8 @@ export class ClinicalDataStore {
     };
     this.records.set(signedId, signed);
     this.indexRecord(draft.patientId, signedId);
+    this.persistence?.saveRecord(draft); // now isLatest = false
+    this.persistence?.saveRecord(signed);
 
     this.auditManager.appendEntry({
       actorId: actor.userId,

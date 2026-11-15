@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import type { PatientEntity } from '../patient/profile.ts';
 import type { AuditChainManager } from '../audit/hashChain.ts';
+import type { OfflineCardRepo, PatientRepo } from '../data/repositories.ts';
 import {
   buildCardPayload,
   signCardWithSizeGuard,
@@ -41,9 +42,20 @@ export class OfflineCardStore {
   private byPatient = new Map<string, string[]>(); // patientId -> card ids, oldest first
   private currentTokens = new Map<string, { cardId: string; token: string }>(); // patientId -> current card token
   private auditManager?: AuditChainManager;
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: OfflineCardRepo & PatientRepo;
 
   constructor(auditManager?: AuditChainManager) {
     this.auditManager = auditManager;
+  }
+
+  /** Rebuilds card rows and current tokens from storage (start-up). */
+  hydrate(cards: Array<{ card: OfflineCardRecord; currentToken: string | null }>): void {
+    for (const { card, currentToken } of [...cards].sort((a, b) => a.card.version - b.card.version)) {
+      this.cards.set(card.id, card);
+      this.byPatient.set(card.patientId, [...(this.byPatient.get(card.patientId) || []), card.id]);
+      if (currentToken) this.currentTokens.set(card.patientId, { cardId: card.id, token: currentToken });
+    }
   }
 
   /**
@@ -83,6 +95,9 @@ export class OfflineCardStore {
     patient.cardVersion = version;
     patient.cardStale = false;
     patient.updatedAt = new Date().toISOString();
+    if (previous) this.persistence?.saveOfflineCard(previous, null); // superseded: its token is no longer kept
+    this.persistence?.saveOfflineCard(card, token);
+    this.persistence?.savePatient(patient);
 
     // No card content in the audit trail, only the fact of issuance.
     this.auditManager?.appendEntry({
@@ -127,6 +142,7 @@ export class OfflineCardStore {
       card.revokedAt = new Date().toISOString();
       card.revocationReason = reason;
       if (this.currentTokens.get(patientId)?.cardId === id) this.currentTokens.delete(patientId);
+      this.persistence?.saveOfflineCard(card, null);
       this.auditManager?.appendEntry({
         actorId: patientId,
         subjectId: patientId,

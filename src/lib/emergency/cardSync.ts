@@ -17,6 +17,7 @@ import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
 import type { FinalRecordEvent, RecordSource } from '../clinical/store.ts';
 import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
 import { encounterDiagnosis } from '../clinical/encounters.ts';
+import type { PatientRepo } from '../data/repositories.ts';
 
 export const RECORD_CHANGED_MESSAGE = t('notify_record_changed', 'en');
 
@@ -65,6 +66,8 @@ export class CardContentSync {
   private patientsById: Map<string, PatientEntity>;
   private dispatcher: NotificationDispatcher;
   private auditManager: AuditChainManager;
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: PatientRepo;
 
   constructor(deps: { patientsById: Map<string, PatientEntity>; dispatcher: NotificationDispatcher; auditManager: AuditChainManager }) {
     this.patientsById = deps.patientsById;
@@ -151,6 +154,7 @@ export class CardContentSync {
     const markedStale = changed && hasCard;
     if (markedStale) patient.cardStale = true;
     patient.updatedAt = new Date().toISOString();
+    this.persistence?.savePatient(patient);
 
     if (markedStale) {
       // No clinical detail in the audit trail, only what kind of record changed the card.

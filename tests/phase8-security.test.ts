@@ -14,7 +14,7 @@ const strongHex = () => crypto.randomBytes(32).toString('hex');
 function startServer(env: Record<string, string | undefined>, port: number) {
   const output: string[] = [];
   const child = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], {
-    env: { ...process.env, PORT: String(port), ...env }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, STORAGE: 'memory', PORT: String(port), ...env }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout!.on('data', (d) => output.push(String(d)));
   child.stderr!.on('data', (d) => output.push(String(d)));

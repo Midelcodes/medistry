@@ -9,27 +9,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { generateSeedData } from '../prisma/seed.ts';
-import { AuditChainManager } from './lib/audit/hashChain.ts';
-import { ClinicalDataStore } from './lib/clinical/store.ts';
-import { ClinicalTimelineEngine } from './lib/clinical/timeline.ts';
-import { NotificationDispatcher, ConsoleNotificationProvider } from './lib/notifications/dispatcher.ts';
-import { EmergencyBreakGlassEngine } from './lib/emergency/breakGlassEngine.ts';
 import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { getPublicJwks } from './lib/crypto/cardKeys.ts';
-import { OfflineCardStore } from './lib/emergency/offlineCardStore.ts';
-import { OfflineScanService } from './lib/emergency/offlineScans.ts';
-import { CardContentSync } from './lib/emergency/cardSync.ts';
-import { RecordFlagStore } from './lib/clinical/recordFlags.ts';
 import { escapeHtml } from './lib/security/rateLimiter.ts';
 import { generateWalletCardSvg, generateWristbandSvg, DEFAULT_CONFIG } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
-import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
-import { PatientAccessLogManager } from './lib/audit/accessLogManager.ts';
-import { decryptPatientDemographics, type PatientEntity } from './lib/patient/profile.ts';
-import { seedClinicalRecords } from './lib/site/seedClinical.ts';
+import { decryptPatientDemographics } from './lib/patient/profile.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
+import { createPersistence } from './lib/data/storage.ts';
+import { createRuntime } from './lib/runtime.ts';
 import { scannerStrings } from './lib/i18n/translations.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
 import { appBaseUrl, clientIp as getClientIp, DEMO_MODE, deploymentCountry } from './lib/security/config.ts';
@@ -39,56 +28,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
-// 1. Initialize In-Memory Data Store & Engines
+// 1. Storage and engines. Memory by default; STORAGE=postgres + DATABASE_URL writes through to PostgreSQL and
+// rebuilds the working set from it at start-up (see src/lib/data/repositories.ts).
 console.log('📦 Initializing MEDISTRY Clinical Store and Cryptographic Engines...');
-const seedData = generateSeedData();
-const auditManager = new AuditChainManager();
-const clinicalStore = new ClinicalDataStore(auditManager);
-const timelineEngine = new ClinicalTimelineEngine(clinicalStore);
-const consoleProvider = new ConsoleNotificationProvider();
-const dispatcher = new NotificationDispatcher(consoleProvider);
-const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
 // Loads the offline card signing key at startup, so a missing production key fails closed immediately.
 const offlineCardManager = new OfflineEmergencyCardManager();
-const offlineCardStore = new OfflineCardStore(auditManager);
+const startupFailed = (err: any): never => {
+  // One clear line (no stack dump of the database client, no connection strings).
+  console.error(`Startup failed: ${String(err?.message || err).split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean).pop()}`);
+  process.exit(1);
+};
+const persistence = await createPersistence().catch(startupFailed);
+const runtime = await createRuntime(persistence).catch(startupFailed);
+console.log(`💾 Storage: ${persistence.mode}`);
+const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
+  consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
-const consentManager = new ConsentLifecycleManager(auditManager);
-const accessLogManager = new PatientAccessLogManager(auditManager);
-
-// Index patients by ID and by emergency code (raw and formatted)
-const patientsById = new Map<string, PatientEntity>();
-const patientsByCode = new Map<string, PatientEntity>();
-const codeByPatient = new Map<string, { rawCode: string; formattedCode: string }>();
-
-for (const entry of seedData.patients) {
-  patientsById.set(entry.patient.id, entry.patient);
-  patientsByCode.set(entry.emergencyCode.rawCode, entry.patient);
-  patientsByCode.set(entry.emergencyCode.formattedCode, entry.patient);
-  codeByPatient.set(entry.patient.id, {
-    rawCode: entry.emergencyCode.rawCode,
-    formattedCode: entry.emergencyCode.formattedCode,
-  });
-}
-
-// Resolve provenance names and seed synthetic FHIR records for the timelines
-for (const f of seedData.facilities) {
-  timelineEngine.registerFacility(f.id, f.name);
-  accessLogManager.registerFacility(f.id, f.name);
-}
-for (const c of seedData.clinicians) {
-  timelineEngine.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
-  timelineEngine.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
-  accessLogManager.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
-  accessLogManager.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
-}
-seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities,
-  new Map(seedData.patients.map((p) => [p.patient.id, p.encounters])));
-
-// From now on, doctor-signed records keep the emergency card fields in step (seed records are already applied).
-const cardSync = new CardContentSync({ patientsById, dispatcher, auditManager });
-clinicalStore.onFinalRecord((event) => cardSync.handle(event));
 
 const SITE_DIR = path.join(ROOT_DIR, 'site');
 const handlePortalApi = createPortalApi({
@@ -104,15 +61,9 @@ const handlePortalApi = createPortalApi({
   emergencyEngine,
   notifications: consoleProvider,
   offlineCards: offlineCardStore,
-  recordFlags: new RecordFlagStore({ clinicalStore, auditManager, dispatcher }),
-  offlineScans: new OfflineScanService({
-    auditManager,
-    dispatcher,
-    cardStore: offlineCardStore,
-    clinicians: seedData.clinicians,
-    facilities: seedData.facilities,
-    patientsById,
-  }),
+  recordFlags,
+  offlineScans,
+  persistence,
   dataDir: path.join(ROOT_DIR, 'data'),
 });
 
@@ -340,6 +291,7 @@ const server = http.createServer(async (req, res) => {
         activePatients: seedData.patients.length,
         accreditedFacilities: seedData.facilities.length,
         verifiedClinicians: seedData.clinicians.length,
+        storage: persistence.stats(),
       });
       return;
     }
@@ -508,6 +460,14 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: 'Internal Server Error', message: err.message });
   }
 });
+
+// Write-through storage: finish queued writes before the process exits.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    server.close();
+    persistence.close().catch(() => {}).finally(() => process.exit(0));
+  });
+}
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);

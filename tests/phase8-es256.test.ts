@@ -170,7 +170,7 @@ describe('4. JWKS endpoint', () => {
   let server: ChildProcess;
 
   before(async () => {
-    const env = { ...process.env, PORT: String(PORT) };
+    const env = { ...process.env, STORAGE: 'memory', PORT: String(PORT) };
     delete env.OFFLINE_CARD_PRIVATE_KEY;
     server = spawn(process.execPath, ['--experimental-strip-types', 'src/server.ts'], { env, stdio: 'ignore' });
     for (let i = 0; i < 50; i++) {

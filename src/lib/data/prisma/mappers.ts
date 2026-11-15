@@ -1,0 +1,256 @@
+/**
+ * Entity <-> database row mapping for the Prisma repositories. Pure functions (no database), so they are
+ * tested without Postgres (tests/phase8-storage.test.ts).
+ *
+ * Encryption at rest: every value that is health or contact data, a free-text reason, a secret or a code is
+ * encrypted here with encryptField (AES-256-GCM, FIELD_ENCRYPTION_KEY) before it leaves the process, and
+ * decrypted on load. Demographic fields arrive already encrypted from the patient entity and are stored as is.
+ */
+import crypto from 'node:crypto';
+import { encryptField, decryptField, type PatientEntity } from '../../patient/profile.ts';
+import { hashEmergencyCode, normalizePatientCode } from '../../code/crockford.ts';
+import type { ChainedAuditEntry } from '../../audit/hashChain.ts';
+import type { StoredClinicalRecord } from '../../clinical/store.ts';
+import type { PendingAccessRequest, StoredConsentGrant } from '../../consent/consentManager.ts';
+import type { StoredEmergencyGrant } from '../../emergency/breakGlassEngine.ts';
+import type { OfflineCardRecord } from '../../emergency/offlineCardStore.ts';
+import type { OfflineScanEventRecord } from '../../emergency/offlineScans.ts';
+import type { RecordFlag } from '../../clinical/recordFlags.ts';
+import type { DisputeTicket } from '../../audit/accessLogManager.ts';
+import type { SeedClinician, SeedFacility } from '../../../../prisma/seed.ts';
+import type { DeviceKeyEntity, EmergencyCodeEntity, NotificationEntity } from '../repositories.ts';
+
+type Row = Record<string, any>;
+
+const date = (s?: string | null) => (s ? new Date(s) : null);
+const iso = (d?: Date | string | null) => (d ? new Date(d).toISOString() : undefined);
+const enc = (s?: string | null) => (s === undefined || s === null ? null : encryptField(s));
+const dec = (s?: string | null) => (s ? decryptField(s) : undefined);
+/** Drops keys whose value is undefined, so loaded entities look like the ones the engines create. */
+function clean<T extends object>(o: T): T {
+  for (const k of Object.keys(o)) if ((o as any)[k] === undefined) delete (o as any)[k];
+  return o;
+}
+
+// ---------- Facility ----------
+export const facilityToRow = (f: SeedFacility): Row => ({
+  id: f.id, name: f.name, region: f.region, type: f.type, address: f.address, countryCode: f.countryCode,
+  registryCode: f.registryCode, synthetic: !!f.synthetic, status: 'VERIFIED',
+});
+export const rowToFacility = (r: Row): SeedFacility => clean({
+  id: r.id, name: r.name, region: r.region, countryCode: r.countryCode, type: r.type, address: r.address,
+  registryCode: r.registryCode ?? null, synthetic: r.synthetic || undefined,
+});
+
+// ---------- Clinician (+ user) ----------
+export const clinicianToRows = (c: SeedClinician) => ({
+  user: { id: c.userId, role: 'DOCTOR', countryCode: c.countryCode },
+  clinician: {
+    id: c.id, userId: c.userId, fullName: c.fullName, licenseNumber: c.licenseNumber, countryCode: c.countryCode,
+    specialty: c.specialty, facilityId: c.facilityId, status: c.status,
+  },
+});
+export const rowToClinician = (r: Row): SeedClinician => ({
+  id: r.id, userId: r.userId, fullName: r.fullName, licenseNumber: r.licenseNumber, countryCode: r.countryCode,
+  specialty: r.specialty, facilityId: r.facilityId, status: r.status,
+});
+
+// ---------- Patient (+ user) ----------
+export function patientToRows(p: PatientEntity) {
+  const profile = {
+    emergencyContacts: p.emergencyContacts, allergies: p.allergies, chronicConditions: p.chronicConditions,
+    activeMedications: p.activeMedications, cardConditions: p.cardConditions,
+  };
+  return {
+    user: { id: p.userId, role: 'PATIENT', countryCode: p.countryCode },
+    patient: {
+      id: p.id, userId: p.userId,
+      encryptedFirstName: p.encryptedFirstName, encryptedLastName: p.encryptedLastName, encryptedDob: p.encryptedDob,
+      gender: p.gender, encryptedNin: p.encryptedNin ?? null, photoUrl: p.photoUrl ?? null,
+      bloodGroup: p.bloodGroup, genotype: p.genotype, advanceDirectiveDnr: p.advanceDirectiveDnr, organDonor: p.organDonor,
+      publicEmergencyOptIn: p.publicEmergencyOptIn,
+      encryptedEmergencyProfile: encryptField(JSON.stringify(profile)),
+      cardMedicationIds: p.cardMedicationIds, cardIncludeRecentDiagnosis: p.cardIncludeRecentDiagnosis,
+      cardVersion: p.cardVersion, cardStale: p.cardStale, preferredLocale: p.preferredLocale ?? null,
+      countryCode: p.countryCode, primaryFacilityId: p.primaryFacilityId ?? null,
+      createdAt: new Date(p.createdAt), updatedAt: new Date(p.updatedAt),
+    },
+  };
+}
+export function rowToPatient(r: Row): PatientEntity {
+  const profile = JSON.parse(decryptField(r.encryptedEmergencyProfile));
+  return clean({
+    id: r.id, userId: r.userId, countryCode: r.countryCode, primaryFacilityId: r.primaryFacilityId ?? undefined,
+    encryptedFirstName: r.encryptedFirstName, encryptedLastName: r.encryptedLastName, encryptedDob: r.encryptedDob,
+    gender: r.gender, encryptedNin: r.encryptedNin ?? undefined, photoUrl: r.photoUrl ?? undefined,
+    bloodGroup: r.bloodGroup, genotype: r.genotype, advanceDirectiveDnr: r.advanceDirectiveDnr, organDonor: r.organDonor,
+    publicEmergencyOptIn: r.publicEmergencyOptIn,
+    emergencyContacts: profile.emergencyContacts, allergies: profile.allergies, chronicConditions: profile.chronicConditions,
+    activeMedications: profile.activeMedications, cardConditions: profile.cardConditions,
+    cardMedicationIds: r.cardMedicationIds, cardIncludeRecentDiagnosis: r.cardIncludeRecentDiagnosis,
+    cardVersion: r.cardVersion, cardStale: r.cardStale, preferredLocale: r.preferredLocale ?? undefined,
+    createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+  } as PatientEntity);
+}
+
+// ---------- Emergency code ----------
+const maskCode = (formatted: string) => formatted.split('-').map((g, i, all) =>
+  (i === 0 ? g : i === all.length - 1 ? '*'.repeat(Math.max(0, g.length - 2)) + g.slice(-2) : '*'.repeat(g.length))).join('-');
+export function codeToRow(c: EmergencyCodeEntity): Row {
+  const codeHash = hashEmergencyCode(c.rawCode);
+  return {
+    id: `code-${codeHash.slice(0, 32)}`, patientId: c.patientId, codeHash, encryptedCode: encryptField(c.formattedCode),
+    displayCode: maskCode(c.formattedCode), isActive: c.isActive, createdAt: new Date(c.createdAt),
+    revokedAt: date(c.revokedAt), revocationReason: c.revocationReason ?? null,
+  };
+}
+export function rowToCode(r: Row): EmergencyCodeEntity {
+  const formattedCode = decryptField(r.encryptedCode);
+  return clean({
+    patientId: r.patientId, rawCode: normalizePatientCode(formattedCode), formattedCode, isActive: r.isActive,
+    createdAt: iso(r.createdAt)!, revokedAt: iso(r.revokedAt), revocationReason: r.revocationReason ?? undefined,
+  });
+}
+
+// ---------- Clinical record ----------
+export const recordToRow = (x: StoredClinicalRecord): Row => ({
+  id: x.id, patientId: x.patientId, resourceType: x.resourceType, versionId: x.versionId, isLatest: x.isLatest,
+  previousVersionId: x.previousVersionId ?? null,
+  status: x.status === 'draft' ? 'DRAFT' : 'FINAL', source: x.source === 'patient-reported' ? 'PATIENT_REPORTED' : 'CLINICIAN',
+  draftedByUserId: x.draftedByUserId ?? null, signedByClinicianId: x.signedByClinicianId ?? null, signedAt: date(x.signedAt),
+  authorClinicianId: x.authorClinicianId, originFacilityId: x.originFacilityId, countryCode: x.countryCode,
+  clinicalCategory: x.clinicalCategory ?? null, effectiveDate: x.effectiveDate,
+  encryptedPayload: x.encryptedPayload, payloadSignature: x.payloadSignature,
+  createdAt: new Date(x.createdAt), updatedAt: new Date(x.updatedAt),
+});
+export const rowToRecord = (r: Row): StoredClinicalRecord => clean({
+  id: r.id, patientId: r.patientId, resourceType: r.resourceType, versionId: r.versionId, isLatest: r.isLatest,
+  previousVersionId: r.previousVersionId ?? undefined,
+  status: r.status === 'DRAFT' ? 'draft' : 'final', source: r.source === 'PATIENT_REPORTED' ? 'patient-reported' : 'clinician',
+  draftedByUserId: r.draftedByUserId ?? undefined, signedByClinicianId: r.signedByClinicianId ?? undefined, signedAt: iso(r.signedAt),
+  authorClinicianId: r.authorClinicianId, originFacilityId: r.originFacilityId, countryCode: r.countryCode,
+  clinicalCategory: r.clinicalCategory ?? undefined, effectiveDate: r.effectiveDate,
+  encryptedPayload: r.encryptedPayload, payloadSignature: r.payloadSignature,
+  createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+} as StoredClinicalRecord);
+
+// ---------- Audit entry (the hash covers the plaintext reason; the column holds it encrypted) ----------
+export const auditToRow = (e: ChainedAuditEntry): Row => ({
+  id: e.id, sequenceNumber: e.sequenceNumber, timestamp: e.timestamp, actorId: e.actorId, subjectId: e.subjectId ?? null,
+  action: e.action, accessType: e.accessType, resourceType: e.resourceType ?? null, resourceId: e.resourceId ?? null,
+  facilityId: e.facilityId ?? null, countryCode: e.countryCode ?? null, ipAddress: e.ipAddress, userAgent: e.userAgent,
+  encryptedReason: enc(e.reason), previousHash: e.previousHash, currentHash: e.currentHash,
+});
+export const rowToAudit = (r: Row): ChainedAuditEntry => clean({
+  id: r.id, sequenceNumber: r.sequenceNumber, timestamp: r.timestamp, actorId: r.actorId, subjectId: r.subjectId ?? undefined,
+  action: r.action, accessType: r.accessType, resourceType: r.resourceType ?? undefined, resourceId: r.resourceId ?? undefined,
+  facilityId: r.facilityId ?? undefined, countryCode: r.countryCode ?? undefined, ipAddress: r.ipAddress, userAgent: r.userAgent,
+  reason: dec(r.encryptedReason), previousHash: r.previousHash, currentHash: r.currentHash,
+} as ChainedAuditEntry);
+
+// ---------- Consent ----------
+export const consentRequestToRow = (q: PendingAccessRequest): Row => ({
+  id: q.id, patientId: q.patientId, requestingClinicianId: q.requestingClinicianId, requestingClinicianName: q.requestingClinicianName,
+  requestingFacilityId: q.requestingFacilityId, requestingFacilityName: q.requestingFacilityName, requestedScopes: q.requestedScopes,
+  durationPreset: q.durationPreset, durationHours: q.durationHours, encryptedClinicalReason: encryptField(q.clinicalReason),
+  hashedOtp: q.hashedOtp, otpExpiresAt: new Date(q.otpExpiresAt), otpAttemptsRemaining: q.otpAttemptsRemaining,
+  status: q.status, createdAt: new Date(q.createdAt),
+});
+export const rowToConsentRequest = (r: Row): PendingAccessRequest => ({
+  id: r.id, patientId: r.patientId, requestingClinicianId: r.requestingClinicianId, requestingClinicianName: r.requestingClinicianName,
+  requestingFacilityId: r.requestingFacilityId, requestingFacilityName: r.requestingFacilityName, requestedScopes: r.requestedScopes,
+  durationPreset: r.durationPreset, durationHours: r.durationHours, clinicalReason: decryptField(r.encryptedClinicalReason),
+  hashedOtp: r.hashedOtp, otpExpiresAt: new Date(r.otpExpiresAt).getTime(), otpAttemptsRemaining: r.otpAttemptsRemaining,
+  status: r.status, createdAt: iso(r.createdAt)!,
+});
+export const consentGrantToRow = (g: StoredConsentGrant): Row => ({
+  id: g.id, patientId: g.patientId, targetFacilityId: g.targetFacilityId ?? null, targetClinicianId: g.targetClinicianId ?? null,
+  scopes: g.scopes, requestingClinicianName: g.requestingClinicianName, requestingFacilityName: g.requestingFacilityName,
+  encryptedClinicalReason: encryptField(g.clinicalReason), validUntil: new Date(g.validUntil), isRevoked: g.isRevoked,
+  revokedAt: date(g.revokedAt), revocationReason: g.revocationReason ?? null, createdAt: new Date(g.createdAt),
+});
+export const rowToConsentGrant = (r: Row): StoredConsentGrant => clean({
+  id: r.id, patientId: r.patientId, targetFacilityId: r.targetFacilityId ?? undefined, targetClinicianId: r.targetClinicianId ?? undefined,
+  scopes: r.scopes, requestingClinicianName: r.requestingClinicianName, requestingFacilityName: r.requestingFacilityName,
+  clinicalReason: decryptField(r.encryptedClinicalReason), validUntil: new Date(r.validUntil), isRevoked: r.isRevoked,
+  revokedAt: iso(r.revokedAt), revocationReason: r.revocationReason ?? undefined, createdAt: iso(r.createdAt)!,
+} as StoredConsentGrant);
+
+// ---------- Break-glass grant and disputes ----------
+export const emergencyGrantToRow = (g: StoredEmergencyGrant): Row => ({
+  id: g.id, patientId: g.patientId, encryptedEmergencyCode: encryptField(g.emergencyCode), clinicianId: g.clinicianId,
+  facilityId: g.facilityId, facilityName: g.facilityName, treatingDoctorName: g.treatingDoctorName, reason: g.reason,
+  encryptedReasonDetails: enc(g.reasonDetails), grantedAt: new Date(g.grantedAt), expiresAt: new Date(g.expiresAt),
+  fullHistoryAccess: g.fullHistoryAccess, coSignClinicianId: g.coSignClinicianId ?? null, coSignDoctorName: g.coSignDoctorName ?? null,
+  encryptedCoSignReason: enc(g.coSignReason), isDisputed: g.isDisputed, disputeReason: g.disputeReason ?? null,
+});
+export const rowToEmergencyGrant = (r: Row): StoredEmergencyGrant => clean({
+  id: r.id, patientId: r.patientId, emergencyCode: decryptField(r.encryptedEmergencyCode), clinicianId: r.clinicianId,
+  facilityId: r.facilityId, facilityName: r.facilityName, treatingDoctorName: r.treatingDoctorName, reason: r.reason,
+  reasonDetails: dec(r.encryptedReasonDetails), grantedAt: iso(r.grantedAt)!, expiresAt: new Date(r.expiresAt),
+  fullHistoryAccess: r.fullHistoryAccess, coSignClinicianId: r.coSignClinicianId ?? undefined, coSignDoctorName: r.coSignDoctorName ?? undefined,
+  coSignReason: dec(r.encryptedCoSignReason), isDisputed: r.isDisputed, disputeReason: r.disputeReason ?? undefined,
+} as StoredEmergencyGrant);
+export const disputeToRow = (t: DisputeTicket): Row => ({
+  ticketId: t.ticketId, auditLogId: t.auditLogId, patientId: t.patientId, actorId: t.actorId, facilityId: t.facilityId ?? null,
+  accessType: t.accessType, encryptedDisputeReason: encryptField(t.disputeReason), createdAt: new Date(t.createdAt),
+  status: t.status, adminNotes: t.adminNotes ?? null,
+});
+export const rowToDispute = (r: Row): DisputeTicket => clean({
+  ticketId: r.ticketId, auditLogId: r.auditLogId, patientId: r.patientId, actorId: r.actorId, facilityId: r.facilityId ?? undefined,
+  accessType: r.accessType, disputeReason: decryptField(r.encryptedDisputeReason), createdAt: iso(r.createdAt)!,
+  status: r.status, adminNotes: r.adminNotes ?? undefined,
+} as DisputeTicket);
+
+// ---------- Offline cards, scans, device keys ----------
+export const offlineCardToRow = (c: OfflineCardRecord, currentToken: string | null): Row => ({
+  id: c.id, patientId: c.patientId, version: c.version, kid: c.kid, payloadHash: c.payloadHash,
+  encryptedCurrentToken: currentToken ? encryptField(currentToken) : null,
+  issuedAt: new Date(c.issuedAt), expiresAt: new Date(c.expiresAt), revokedAt: date(c.revokedAt),
+  revocationReason: c.revocationReason ?? null, supersededById: c.supersededById ?? null,
+});
+export const rowToOfflineCard = (r: Row): { card: OfflineCardRecord; currentToken: string | null } => ({
+  card: clean({
+    id: r.id, patientId: r.patientId, version: r.version, kid: r.kid, payloadHash: r.payloadHash,
+    issuedAt: iso(r.issuedAt)!, expiresAt: iso(r.expiresAt)!, revokedAt: iso(r.revokedAt),
+    revocationReason: r.revocationReason ?? undefined, supersededById: r.supersededById ?? undefined,
+  } as OfflineCardRecord),
+  currentToken: r.encryptedCurrentToken ? decryptField(r.encryptedCurrentToken) : null,
+});
+export const scanEventToRow = (e: OfflineScanEventRecord): Row => ({
+  id: e.id, patientId: e.patientId, cardVersion: e.cardVersion, cardKid: e.cardKid, clinicianId: e.clinicianId,
+  facilityId: e.facilityId, clinicianCountry: e.clinicianCountry, cardCountry: e.cardCountry, reason: e.reason,
+  encryptedDetails: enc(e.details), scannedAt: new Date(e.scannedAt), receivedAt: new Date(e.receivedAt),
+  deviceKeyThumbprint: e.deviceKeyThumbprint, deviceSig: e.deviceSig, auditLogId: e.auditLogId, status: e.status,
+});
+export const rowToScanEvent = (r: Row): OfflineScanEventRecord => clean({
+  id: r.id, patientId: r.patientId, cardVersion: r.cardVersion, cardKid: r.cardKid, clinicianId: r.clinicianId,
+  facilityId: r.facilityId, clinicianCountry: r.clinicianCountry, cardCountry: r.cardCountry, reason: r.reason,
+  details: dec(r.encryptedDetails), scannedAt: iso(r.scannedAt)!, receivedAt: iso(r.receivedAt)!,
+  deviceKeyThumbprint: r.deviceKeyThumbprint, status: r.status, auditLogId: r.auditLogId, deviceSig: r.deviceSig,
+} as OfflineScanEventRecord);
+export const deviceKeyToRow = (k: DeviceKeyEntity): Row => ({
+  clinicianId: k.clinicianId, thumbprint: k.thumbprint, publicJwk: k.publicJwk as object, boundAt: new Date(k.boundAt),
+});
+export const rowToDeviceKey = (r: Row): DeviceKeyEntity => ({
+  clinicianId: r.clinicianId, thumbprint: r.thumbprint, publicJwk: r.publicJwk, boundAt: iso(r.boundAt)!,
+});
+
+// ---------- Record flags ----------
+export const recordFlagToRow = (f: RecordFlag): Row => ({
+  id: f.id, recordId: f.recordId, patientId: f.patientId, resourceType: f.resourceType, encryptedNote: encryptField(f.note),
+  authorClinicianId: f.authorClinicianId, status: f.status, createdAt: new Date(f.createdAt),
+});
+export const rowToRecordFlag = (r: Row): RecordFlag => ({
+  id: r.id, recordId: r.recordId, patientId: r.patientId, resourceType: r.resourceType, note: decryptField(r.encryptedNote),
+  authorClinicianId: r.authorClinicianId, createdAt: iso(r.createdAt)!, status: r.status,
+});
+
+// ---------- Notifications (recipient, title and body encrypted: bodies can hold one-time codes) ----------
+export const notificationToRow = (n: NotificationEntity, createdAt = new Date()): Row => ({
+  id: crypto.randomUUID(), channel: n.channel, encryptedRecipient: encryptField(n.to),
+  encryptedTitle: enc(n.title), encryptedBody: encryptField(n.body), createdAt,
+});
+export const rowToNotification = (r: Row): NotificationEntity => clean({
+  channel: r.channel, to: decryptField(r.encryptedRecipient), title: dec(r.encryptedTitle), body: decryptField(r.encryptedBody),
+});
