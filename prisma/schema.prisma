@@ -10,6 +10,8 @@ generator client {
 enum UserRole {
   PATIENT
   DOCTOR
+  NURSE           // drafts only; a doctor signs
+  RECORDS_OFFICER // drafts only; a doctor signs
   FACILITY_ADMIN
   PLATFORM_ADMIN
 }
@@ -33,6 +35,21 @@ enum BreakGlassReason {
   LIFE_THREATENING
   PATIENT_UNABLE_TO_CONSENT
   OTHER
+}
+
+enum RecordStatus {
+  DRAFT // created by a nurse or records officer; invisible and off the card until a doctor signs
+  FINAL // signed by a verified doctor
+}
+
+enum RecordSource {
+  CLINICIAN
+  PATIENT_REPORTED // stated by the patient; shown as "Patient-reported, not clinician-verified"
+}
+
+enum RecordFlagStatus {
+  OPEN
+  RESOLVED
 }
 
 enum OfflineScanStatus {
@@ -207,6 +224,7 @@ model Patient {
   cardMedicationIds          String[] @default([]) // Ids of the patient's active medication entries (MedicationStatement records)
   cardIncludeRecentDiagnosis Boolean  @default(false)
   cardVersion                Int      @default(0)  // Version of the latest issued card (0 = none)
+  cardStale                  Boolean  @default(false) // A signed record changed card content since the card was issued
 
   countryCode          String       @default("NG")
   primaryFacilityId    String?
@@ -301,9 +319,17 @@ model PatientRecord {
   isLatest          Boolean          @default(true)
   previousVersionId String?
 
-  // Origin & Federation
-  authorClinicianId String
-  authorClinician   Clinician        @relation(fields: [authorClinicianId], references: [id])
+  // Drafts and provenance. Corrections are new versions (previousVersionId); nothing is deleted.
+  status              RecordStatus @default(FINAL)
+  source              RecordSource @default(CLINICIAN)
+  draftedByUserId     String?      // nurse or records officer who created the draft
+  signedByClinicianId String?      // doctor who signed (set for every FINAL version)
+  signedAt            DateTime?
+  flags               RecordFlag[]
+
+  // Origin & Federation. Null only for a draft by non-clinician staff (see draftedByUserId).
+  authorClinicianId String?
+  authorClinician   Clinician?       @relation(fields: [authorClinicianId], references: [id])
   originFacilityId  String
   originFacility    Facility         @relation(fields: [originFacilityId], references: [id])
   countryCode       String           @default("NG")
@@ -318,7 +344,23 @@ model PatientRecord {
   updatedAt         DateTime         @updatedAt
 
   @@index([patientId, resourceType, isLatest])
+  @@index([patientId, status])
   @@index([patientId, effectiveDate])
+}
+
+// A patient's note that a record may be wrong. It never changes the record; the signing clinician is notified.
+model RecordFlag {
+  id                String           @id @default(uuid())
+  recordId          String
+  record            PatientRecord    @relation(fields: [recordId], references: [id])
+  patientId         String
+  note              String
+  authorClinicianId String           // clinician who signed the flagged version
+  status            RecordFlagStatus @default(OPEN)
+  createdAt         DateTime         @default(now())
+
+  @@index([patientId, createdAt])
+  @@index([authorClinicianId, status])
 }
 
 model ConsentGrant {

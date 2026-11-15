@@ -280,7 +280,7 @@ describe('6. Patient portal API (end to end, demo mode)', () => {
     const res = await patch({ cardConditions: [conditions[0]], cardMedicationIds: [medIds[0]], cardIncludeRecentDiagnosis: true });
     assert.strictEqual(res.status, 200);
     const { patient } = await res.json();
-    assert.deepStrictEqual(patient.card, { conditions: [conditions[0]], medicationIds: [medIds[0]], includeRecentDiagnosis: true, version: 0 });
+    assert.deepStrictEqual(patient.card, { conditions: [conditions[0]], medicationIds: [medIds[0]], includeRecentDiagnosis: true, version: 0, stale: false });
 
     const first = await (await fetch(`${base}/api/patients/${patientId}/offline-card`, { method: 'POST' })).json();
     const second = await (await fetch(`${base}/api/patients/${patientId}/offline-card`, { method: 'POST' })).json();

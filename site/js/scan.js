@@ -167,7 +167,11 @@ function renderCard(payload, expired, ctx) {
   alg.append(el('div', 'res-label', tr('scan_severe_allergies')));
   if (Array.isArray(e.alg) && e.alg.length) {
     const ul = el('ul');
-    for (const a of e.alg) ul.append(el('li', null, a.r ? `${a.s}: ${a.r}` : a.s));
+    for (const a of e.alg) {
+      const li = el('li', null, a.r ? `${a.s}: ${a.r}` : a.s);
+      if (a.pr) li.append(' ', el('em', 'res-pr', `(${tr('scan_patient_reported')})`));
+      ul.append(li);
+    }
     alg.append(ul);
   } else {
     alg.append(el('p', null, tr('scan_no_allergies')));

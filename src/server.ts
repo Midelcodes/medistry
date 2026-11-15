@@ -20,6 +20,9 @@ import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { getPublicJwks } from './lib/crypto/cardKeys.ts';
 import { OfflineCardStore } from './lib/emergency/offlineCardStore.ts';
 import { OfflineScanService } from './lib/emergency/offlineScans.ts';
+import { CardContentSync } from './lib/emergency/cardSync.ts';
+import { RecordFlagStore } from './lib/clinical/recordFlags.ts';
+import { escapeHtml } from './lib/security/rateLimiter.ts';
 import { generateWalletCardSvg, generateWristbandSvg, DEFAULT_CONFIG } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
@@ -81,6 +84,10 @@ for (const c of seedData.clinicians) {
 }
 seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities);
 
+// From now on, doctor-signed records keep the emergency card fields in step (seed records are already applied).
+const cardSync = new CardContentSync({ patientsById, dispatcher, auditManager });
+clinicalStore.onFinalRecord((event) => cardSync.handle(event));
+
 const SITE_DIR = path.join(ROOT_DIR, 'site');
 const handlePortalApi = createPortalApi({
   seedData,
@@ -95,6 +102,7 @@ const handlePortalApi = createPortalApi({
   emergencyEngine,
   notifications: consoleProvider,
   offlineCards: offlineCardStore,
+  recordFlags: new RecordFlagStore({ clinicalStore, auditManager, dispatcher }),
   offlineScans: new OfflineScanService({
     auditManager,
     dispatcher,
@@ -436,8 +444,12 @@ const server = http.createServer(async (req, res) => {
       }
 
       // Same card as the patient portal: the current valid card, or the first one if none exists.
-      const card = await handlePortalApi.offlineCardFor(patient, req, false);
-      sendHtml(res, 200, card.cardHtml);
+      try {
+        const card = await handlePortalApi.offlineCardFor(patient, req, false);
+        sendHtml(res, 200, card.cardHtml);
+      } catch (err: any) {
+        sendHtml(res, err?.status || 500, `<h1>${escapeHtml(err?.message || 'Card unavailable')}</h1><p><a href="/patients">Open the patient portal</a> to reissue your card.</p>`);
+      }
       return;
     }
 

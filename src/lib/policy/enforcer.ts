@@ -3,11 +3,13 @@
  * Strict Deny-By-Default: Role-Based & Relationship-Based Access Control (RBAC + ReBAC).
  */
 
-export type UserRole = 'PATIENT' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN';
+// NURSE and RECORDS_OFFICER may only create DRAFT records; a verified doctor must sign them.
+export type UserRole = 'PATIENT' | 'DOCTOR' | 'NURSE' | 'RECORDS_OFFICER' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN';
 
 export type PolicyAction = 
   | 'PATIENT_READ_RECORD'
   | 'PATIENT_WRITE_RECORD'
+  | 'PATIENT_DRAFT_RECORD' // unsigned draft, invisible until a doctor signs it
   | 'PATIENT_EXPORT_ALL'
   | 'PATIENT_SET_CARD_VISIBILITY' // choose which existing items appear on the offline card (no clinical writes)
   | 'EMERGENCY_BREAK_GLASS'
@@ -24,6 +26,9 @@ export interface ActorContext {
   clinicianId?: string;
   facilityId?: string;
   isVerifiedClinician?: boolean;
+  // Nurses and records officers: their registration is checked outside this module.
+  // TODO: which register verifies nurses and records officers is not decided; keep this a configurable check.
+  isVerifiedStaff?: boolean;
 }
 
 export interface ConsentContext {
@@ -100,6 +105,15 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
     return { allowed: false, statusCode: 403, reason: 'Patient role not permitted for this action' };
   }
 
+  // 2b. NURSE / RECORDS_OFFICER: drafts only, under the same consent rules as a doctor's write
+  if (actor.role === 'NURSE' || actor.role === 'RECORDS_OFFICER') {
+    if (action !== 'PATIENT_DRAFT_RECORD') {
+      return { allowed: false, statusCode: 403, reason: `${actor.role} may only create draft records for a doctor to sign` };
+    }
+    if (!actor.isVerifiedStaff) return { allowed: false, statusCode: 403, reason: 'Staff registration is pending or unverified' };
+    return checkConsent(actor, activeConsent, requestedResourceType, 'Draft record permitted under active consent');
+  }
+
   // 3. PLATFORM_ADMIN role authorizations
   if (actor.role === 'PLATFORM_ADMIN') {
     if (action === 'CLINICIAN_VERIFY' || action === 'AUDIT_LOG_READ') {
@@ -167,32 +181,36 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
 
     // Action E: Normal Clinical Read/Write (Requires active patient consent)
     if (action === 'PATIENT_READ_RECORD' || action === 'PATIENT_WRITE_RECORD') {
-      if (!activeConsent) {
-        return { allowed: false, statusCode: 403, reason: 'Access denied: Patient has not consented to record access' };
-      }
-      if (activeConsent.isRevoked) {
-        return { allowed: false, statusCode: 403, reason: 'Access denied: Patient has revoked this consent' };
-      }
-      if (new Date() > new Date(activeConsent.validUntil)) {
-        return { allowed: false, statusCode: 403, reason: 'Access denied: Patient consent has expired' };
-      }
-      // Check clinician/facility match
-      if (activeConsent.targetClinicianId && activeConsent.targetClinicianId !== actor.clinicianId) {
-        return { allowed: false, statusCode: 403, reason: 'Consent is restricted to a different clinician' };
-      }
-      if (activeConsent.targetFacilityId && activeConsent.targetFacilityId !== actor.facilityId) {
-        return { allowed: false, statusCode: 403, reason: 'Consent is restricted to a different facility' };
-      }
-      // Check scope
-      if (!activeConsent.scopes.includes('all') && requestedResourceType && !activeConsent.scopes.includes(requestedResourceType)) {
-        return { allowed: false, statusCode: 403, reason: `Consent does not cover requested resource: ${requestedResourceType}` };
-      }
-
-      return { allowed: true, statusCode: 200, reason: 'Valid active consent grant confirmed' };
+      return checkConsent(actor, activeConsent, requestedResourceType, 'Valid active consent grant confirmed');
     }
   }
 
   // Default fall-through: DENY
   return { allowed: false, statusCode: 403, reason: 'Action forbidden by policy' };
+}
+
+/** Active, unrevoked, unexpired consent that matches the actor's clinician, facility and the resource type. */
+function checkConsent(actor: ActorContext, activeConsent: ConsentContext | null | undefined, requestedResourceType: string | undefined, okReason: string): PolicyDecision {
+  if (!activeConsent) {
+    return { allowed: false, statusCode: 403, reason: 'Access denied: Patient has not consented to record access' };
+  }
+  if (activeConsent.isRevoked) {
+    return { allowed: false, statusCode: 403, reason: 'Access denied: Patient has revoked this consent' };
+  }
+  if (new Date() > new Date(activeConsent.validUntil)) {
+    return { allowed: false, statusCode: 403, reason: 'Access denied: Patient consent has expired' };
+  }
+  // Check clinician/facility match
+  if (activeConsent.targetClinicianId && activeConsent.targetClinicianId !== actor.clinicianId) {
+    return { allowed: false, statusCode: 403, reason: 'Consent is restricted to a different clinician' };
+  }
+  if (activeConsent.targetFacilityId && activeConsent.targetFacilityId !== actor.facilityId) {
+    return { allowed: false, statusCode: 403, reason: 'Consent is restricted to a different facility' };
+  }
+  // Check scope
+  if (!activeConsent.scopes.includes('all') && requestedResourceType && !activeConsent.scopes.includes(requestedResourceType)) {
+    return { allowed: false, statusCode: 403, reason: `Consent does not cover requested resource: ${requestedResourceType}` };
+  }
+  return { allowed: true, statusCode: 200, reason: okReason };
 }
 

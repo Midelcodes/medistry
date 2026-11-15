@@ -29,7 +29,7 @@ export function seedClinicalRecords(
     const otherAuthor = clinicians.find((c) => c.facilityId === otherFacility.id) || author;
 
     const ref = { reference: `Patient/${patient.id}` };
-    const write = (clinician: SeedClinician, facility: SeedFacility, resource: any, category?: string) => {
+    const write = (clinician: SeedClinician, facility: SeedFacility, resource: any, category?: string, source?: 'clinician' | 'patient-reported') => {
       const actor: ActorContext = {
         userId: clinician.userId,
         role: 'DOCTOR',
@@ -46,7 +46,7 @@ export function seedClinicalRecords(
         validUntil: new Date(Date.now() + DAY),
         isRevoked: false,
       };
-      store.writeRecord(patient.id, resource, actor, { consent, facilityId: facility.id, category });
+      store.writeRecord(patient.id, resource, actor, { consent, facilityId: facility.id, category, source });
     };
 
     const recorder = { reference: `Practitioner/${author.id}`, display: author.fullName };
@@ -67,11 +67,12 @@ export function seedClinicalRecords(
     });
 
     patient.allergies.forEach((a, i) => {
+      const reported = a.source === 'patient-reported';
       write(author, primaryFacility, {
         resourceType: 'AllergyIntolerance',
         id: crypto.randomUUID(),
         clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'active' }] },
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: 'confirmed' }] },
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: reported ? 'unconfirmed' : 'confirmed' }] },
         type: 'allergy',
         category: [a.category === 'drug' ? 'medication' : a.category === 'food' ? 'food' : 'environment'],
         criticality: a.severity === 'severe' ? 'high' : 'low',
@@ -80,7 +81,7 @@ export function seedClinicalRecords(
         recordedDate: isoDaysAgo(700 + i * 90),
         recorder,
         reaction: [{ manifestation: [{ text: a.reaction }], severity: a.severity }],
-      });
+      }, undefined, reported ? 'patient-reported' : 'clinician');
     });
 
     patient.activeMedications.forEach((m, i) => {

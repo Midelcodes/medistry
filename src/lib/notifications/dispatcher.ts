@@ -128,11 +128,16 @@ export class NotificationDispatcher {
    * The message names who, where, when and why, so the patient can dispute it.
    */
   async notifyPatientOfOfflineScan(patientId: string, message: string): Promise<DispatchedAlertResult> {
+    return this.notifyUser(patientId, 'Emergency card scanned', message);
+  }
+
+  /** Push notification to one user (patient or clinician). Failures are reported, never thrown. */
+  async notifyUser(userId: string, title: string, message: string): Promise<DispatchedAlertResult> {
     try {
-      await this.provider.sendPush(patientId, 'Emergency card scanned', message);
-      return { recipient: patientId, channel: 'PUSH', status: 'DELIVERED' };
+      await this.provider.sendPush(userId, title, message);
+      return { recipient: userId, channel: 'PUSH', status: 'DELIVERED' };
     } catch (err: any) {
-      return { recipient: patientId, channel: 'PUSH', status: 'FAILED', error: err?.message };
+      return { recipient: userId, channel: 'PUSH', status: 'FAILED', error: err?.message };
     }
   }
 }

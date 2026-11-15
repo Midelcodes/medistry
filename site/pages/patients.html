@@ -99,10 +99,13 @@
                     <label class="check-row"><input type="checkbox" id="card-opt-dx"> <span>Include my most recent diagnosis</span></label>
                   </fieldset>
                   <p class="card-note" id="card-dirty" hidden>Your choices are saved. Reissue the card to put them on it.</p>
+                  <p class="card-note" id="card-stale" hidden>Your record changed since this card was printed. Review your choices and reissue the card.</p>
+                  <p class="card-note" id="card-needs-reissue" hidden></p>
                   <div class="panel-actions">
                     <a id="card-download" class="btn btn-pill-primary" download="medistry-emergency-card-qr.png"><span>Download PNG</span></a>
                     <button type="button" class="btn btn-secondary-pill" id="card-print"><span>Print card</span></button>
                     <button type="button" class="btn btn-secondary-pill" id="card-reissue"><span>Reissue card</span></button>
+                    <button type="button" class="btn btn-secondary-pill" id="card-lost"><span>Report lost card</span></button>
                   </div>
                   <p class="card-meta" id="card-meta"></p>
                   <ul class="card-warnings" id="card-warnings" hidden></ul>

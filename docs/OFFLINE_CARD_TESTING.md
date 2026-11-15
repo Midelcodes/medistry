@@ -43,6 +43,16 @@ Synthetic data only. Use a demo patient from the patient portal.
 | 10 | Reissue the card in the portal, scan the OLD card, record a reason and let it sync, then scan the old card again. | Banner: the server reported the card was replaced by a newer version. |
 | 11 | **Remove pass from this device**, scan again. | Core fields only, plus "Sign in as a clinician to see conditions and medications". |
 
+## Card lifecycle
+
+| # | Step | Expected |
+|---|---|---|
+| 12 | Patient portal → **Report lost card**. | Card revoked; the portal asks for a reissue and shows no preview. `/emergency/offline-card` returns 409. |
+| 13 | Scan the old card offline with a pass, then sync. | The next scan of that card shows the "revoked" banner. |
+| 14 | A doctor signs a change to an allergy, condition or medicine. | The portal shows "Your record changed since this card was printed"; the patient gets "Your record changed. Review and reissue your emergency card." A discontinued opted-in item is removed from the choices and named in the message. |
+| 15 | Patient 5 (Fatima Garba, synthetic) card. | Her allergy is labelled "Patient-reported, not clinician-verified" on the card back and in the scanner. |
+| 16 | Patient portal → Timeline → **Flag as possibly wrong**. | The record does not change; the signing clinician sees the flag at `/api/clinician/record-flags`. |
+
 ## Known limits
 
 - Offline verification proves the card was issued by Medistry and is unexpired. It cannot tell whether

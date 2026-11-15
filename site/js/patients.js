@@ -48,7 +48,7 @@
         seen.forEach((name, id) => select.add(new Option(name, id)));
       }
     }
-    renderTimeline($('#timeline-list'), timeline);
+    renderTimeline($('#timeline-list'), timeline, { flaggable: true });
   }
 
   // ---- Access log ----
@@ -161,6 +161,9 @@
   }
 
   function showCard(card) {
+    $('#card-needs-reissue').hidden = true;
+    $('#card-stale').hidden = !card.stale;
+    $('#card-lost').hidden = false;
     $('#card-preview').srcdoc = card.cardHtml;
     $('#card-download').href = card.qrPngDataUrl;
     $('#card-meta').textContent = `Card version ${card.cardVersion} · issued ${fmtDate(card.issuedAt)} · expires ${fmtDate(card.expiresAt)}`;
@@ -170,7 +173,21 @@
   }
 
   async function loadCard(reissue) {
-    const card = await api(`${base()}/offline-card`, { method: reissue ? 'POST' : 'GET', auth: false, ...(reissue ? { body: {} } : {}) });
+    let card;
+    try {
+      card = await api(`${base()}/offline-card`, { method: reissue ? 'POST' : 'GET', auth: false, ...(reissue ? { body: {} } : {}) });
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      // Revoked or expired: nothing to preview until the patient reissues.
+      $('#card-preview').srcdoc = '';
+      $('#card-download').removeAttribute('href');
+      $('#card-meta').textContent = '';
+      $('#card-stale').hidden = true;
+      $('#card-lost').hidden = true;
+      $('#card-needs-reissue').textContent = err.message;
+      $('#card-needs-reissue').hidden = false;
+      return null;
+    }
     showCard(card);
     return card;
   }
@@ -194,6 +211,27 @@
   $('#card-print').addEventListener('click', () => {
     const frame = $('#card-preview');
     if (frame.contentWindow) frame.contentWindow.print();
+  });
+
+  $('#card-lost').addEventListener('click', async () => {
+    const reason = window.prompt('Report your emergency card lost or stolen? It will stop being trusted once scanners sync. Reason (for example "lost"):', 'lost');
+    if (!reason) return;
+    try {
+      await api(`${base()}/offline-card/revoke`, { method: 'POST', auth: false, body: { reason } });
+      showToast('Card revoked', 'Reissue your card to print a new one.');
+      await loadCard(false);
+    } catch (err) { fail(err); }
+  });
+
+  $('#timeline-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-flag]');
+    if (!btn) return;
+    const note = window.prompt('What looks wrong in this record? (at least 5 characters) The record is not changed; the clinician who signed it is told.');
+    if (!note) return;
+    try {
+      await api(`${base()}/records/${encodeURIComponent(btn.dataset.flag)}/flag`, { method: 'POST', auth: false, body: { note } });
+      showToast('Flag sent', 'The clinician who signed this record has been told.');
+    } catch (err) { fail(err); }
   });
 
   $('#card-reissue').addEventListener('click', async () => {

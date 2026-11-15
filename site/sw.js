@@ -3,7 +3,7 @@
  * Bump CACHE_VERSION whenever any file in PRECACHE changes, so clients pick up the new copies.
  * Only the URLs below are handled; every other request goes to the network untouched.
  */
-const CACHE_VERSION = 'medistry-scan-v4';
+const CACHE_VERSION = 'medistry-scan-v5';
 const CACHE_PREFIX = 'medistry-scan-';
 const JWKS_URL = '/.well-known/medistry-keys.json';
 const PRECACHE = [

@@ -78,6 +78,8 @@ export interface PatientAllergy {
   category: 'drug' | 'food' | 'environment';
   reaction: string;
   severity: 'severe' | 'moderate' | 'mild';
+  // 'patient-reported': stated by the patient (e.g. at onboarding), not verified by a clinician
+  source?: 'clinician' | 'patient-reported';
 }
 
 export interface ActiveMedication {
@@ -130,6 +132,7 @@ export interface PatientEntity {
   cardMedicationIds: string[];       // subset of activeMedications[].id
   cardIncludeRecentDiagnosis: boolean;
   cardVersion: number;               // version of the latest issued card (0 = none issued)
+  cardStale: boolean;                // a signed record changed card content since the card was issued
 
   activeEmergencyCodeId?: string;
   createdAt: string;
@@ -205,6 +208,7 @@ export function createPatientRecord(
     cardMedicationIds: triageData.cardMedicationIds || [],
     cardIncludeRecentDiagnosis: triageData.cardIncludeRecentDiagnosis || false,
     cardVersion: 0,
+    cardStale: false,
 
     createdAt: now,
     updatedAt: now,

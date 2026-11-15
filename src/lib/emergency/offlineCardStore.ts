@@ -81,6 +81,7 @@ export class OfflineCardStore {
     this.byPatient.set(patient.id, [...(this.byPatient.get(patient.id) || []), card.id]);
     this.currentTokens.set(patient.id, { cardId: card.id, token });
     patient.cardVersion = version;
+    patient.cardStale = false;
     patient.updatedAt = new Date().toISOString();
 
     // No card content in the audit trail, only the fact of issuance.
@@ -139,6 +140,21 @@ export class OfflineCardStore {
       });
     }
     return { ...card };
+  }
+
+  /** The current card with its token if it is still valid (not superseded, revoked or expired), else null. */
+  getCurrentIssued(patient: PatientEntity, nowMs = Date.now()): (IssuedOfflineCard & { reused: true }) | null {
+    const current = this.getCurrent(patient.id);
+    const cached = this.currentTokens.get(patient.id);
+    if (!current || cached?.cardId !== current.id || new Date(current.expiresAt).getTime() <= nowMs) return null;
+    const payload = JSON.parse(Buffer.from(cached.token.split('.')[1], 'base64url').toString('utf8')) as CompactCardPayload;
+    return { card: { ...current }, token: cached.token, payload, warnings: [], reused: true };
+  }
+
+  /** The most recent card row (whatever its state), for explaining why there is no current card. */
+  latest(patientId: string): OfflineCardRecord | undefined {
+    const ids = this.byPatient.get(patientId) || [];
+    return ids.length ? { ...this.cards.get(ids[ids.length - 1])! } : undefined;
   }
 
   /** The newest card that has not been superseded or revoked. */

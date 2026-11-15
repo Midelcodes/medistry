@@ -147,7 +147,8 @@
   }
 
   // ---- Timeline rendering (shared) ----
-  function renderTimeline(listEl, items) {
+  // opts.flaggable adds a "Flag as possibly wrong" button per item (patient portal only)
+  function renderTimeline(listEl, items, opts = {}) {
     if (!items.length) {
       listEl.innerHTML = '<li class="empty-note">No records match.</li>';
       return;
@@ -156,7 +157,7 @@
       .map((i) => `<li>
         <div class="tl-head"><span class="tl-title">${esc(i.title)}</span><span class="tl-date">${esc(fmtDate(i.effectiveDate))}</span></div>
         <div class="tl-summary">${esc(i.summary)}</div>
-        <div class="tl-badge"><span class="badge">${esc(i.resourceType)}</span> ${esc(i.badge)}</div>
+        <div class="tl-badge"><span class="badge">${esc(i.resourceType)}</span> ${esc(i.badge)}${opts.flaggable ? ` <button type="button" class="btn-text-link" data-flag="${esc(i.id)}">Flag as possibly wrong</button>` : ''}</div>
       </li>`)
       .join('');
   }

@@ -238,12 +238,14 @@ export function generateSeedData(): SeedDatabasePayload {
       originFacilityId: 'fac-abuja-001',
     },
     {
-      // Patient 5: Young adult, healthy baseline
+      // Patient 5: Young adult, healthy baseline. One allergy she reported herself at onboarding (synthetic).
       demo: { firstName: 'Fatima', lastName: 'Garba', dateOfBirth: '2001-02-14', gender: 'female' as const },
       triage: {
         bloodGroup: 'O_POSITIVE' as const,
         genotype: 'AA' as const,
-        allergies: [],
+        allergies: [
+          { substance: 'Sulfonamide antibiotics', category: 'drug' as const, reaction: 'Facial swelling', severity: 'severe' as const, source: 'patient-reported' as const },
+        ],
         chronicConditions: [],
         activeMedications: [],
         emergencyContacts: [

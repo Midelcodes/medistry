@@ -89,6 +89,7 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     scan_card_revoked: 'At the last sync, the server reported that this card was revoked. Do not rely on it.',
     scan_audit_note: 'Every scan with a pass is logged and the patient is notified.',
     scan_no_optins: 'The patient did not add conditions or medicines to this card.',
+    scan_patient_reported: 'Patient-reported, not clinician-verified',
   },
   ha: { // Hausa (Northern Nigeria & West Africa)
     emergency_title: 'TAƘAITACCEN BAYANIN GAGGAWA NA LAFIYA',
@@ -215,6 +216,7 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     scan_card_revoked: 'Katika usawazishaji wa mwisho, seva iliripoti kuwa kadi hii imefutwa. Usiitegemee.',
     scan_audit_note: 'Kila uchanganuzi wenye kibali hurekodiwa na mgonjwa hujulishwa.',
     scan_no_optins: 'Mgonjwa hakuongeza magonjwa wala dawa kwenye kadi hii.',
+    scan_patient_reported: 'Imeripotiwa na mgonjwa, haijathibitishwa na mhudumu wa afya',
   },
   fr: { // French (West & Central Africa)
     emergency_title: "RÉSUMÉ MÉDICAL D'URGENCE",

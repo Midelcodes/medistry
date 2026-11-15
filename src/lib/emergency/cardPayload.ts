@@ -14,7 +14,8 @@
  *   e    emergency data:
  *        bg   blood group ("A+", "O-", ... or "unknown")      [core, always]
  *        gt   genotype ("AA", "SS", ... or "unknown")         [core, always]
- *        alg  severe allergies [{ s: substance, r: reaction }] [core, omitted when none]
+ *        alg  severe allergies [{ s: substance, r: reaction, pr?: true }] [core, omitted when none]
+ *             pr = patient-reported, not clinician-verified
  *        dnr  true when a DNR directive is on file           [core, omitted when false]
  *        od   true when an organ donor                       [core, omitted when false]
  *        ec   primary emergency contact { n: name, p: phone } [core, omitted when none]
@@ -44,7 +45,7 @@ export interface CompactCardPayload {
   e: {
     bg: string;
     gt: string;
-    alg?: Array<{ s: string; r: string }>;
+    alg?: Array<{ s: string; r: string; pr?: true }>;
     dnr?: true;
     od?: true;
     ec?: { n: string; p: string };
@@ -121,7 +122,8 @@ export function buildCardPayload(
     bg: BLOOD_GROUP_SHORT[patient.bloodGroup] ?? 'unknown',
     gt: patient.genotype && patient.genotype !== 'UNKNOWN' ? patient.genotype : 'unknown',
   };
-  const alg = patient.allergies.filter((a) => a.severity === 'severe').map((a) => ({ s: a.substance, r: a.reaction }));
+  const alg = patient.allergies.filter((a) => a.severity === 'severe')
+    .map((a) => (a.source === 'patient-reported' ? { s: a.substance, r: a.reaction, pr: true as const } : { s: a.substance, r: a.reaction }));
   if (alg.length) e.alg = alg;
   if (patient.advanceDirectiveDnr) e.dnr = true;
   if (patient.organDonor) e.od = true;

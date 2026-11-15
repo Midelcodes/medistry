@@ -27,6 +27,7 @@ import { buildOfflineCardBundle } from '../emergency/offlineCard.ts';
 import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import type { OfflineScanService } from '../emergency/offlineScans.ts';
+import type { RecordFlagStore } from '../clinical/recordFlags.ts';
 import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
 
 export interface PortalContext {
@@ -43,6 +44,7 @@ export interface PortalContext {
   notifications: ConsoleNotificationProvider;
   offlineCards: OfflineCardStore;
   offlineScans: OfflineScanService;
+  recordFlags: RecordFlagStore;
   dataDir: string;
 }
 
@@ -206,6 +208,7 @@ export function createPortalApi(ctx: PortalContext) {
         medicationIds: p.cardMedicationIds,
         includeRecentDiagnosis: p.cardIncludeRecentDiagnosis,
         version: p.cardVersion,
+        stale: p.cardStale,
       },
     };
   }
@@ -224,9 +227,21 @@ export function createPortalApi(ctx: PortalContext) {
    */
   async function offlineCardFor(p: PatientEntity, req: http.IncomingMessage, reissue: boolean) {
     const opts = { recentDiagnosis: p.cardIncludeRecentDiagnosis ? latestDiagnosis(p) : null };
-    const issued = reissue ? { ...ctx.offlineCards.issue(p, opts), reused: false } : ctx.offlineCards.getOrIssue(p, opts);
+    let issued: Awaited<ReturnType<typeof ctx.offlineCards.issue>> & { reused: boolean };
+    const current = reissue ? null : ctx.offlineCards.getCurrentIssued(p);
+    if (reissue || (!current && p.cardVersion === 0)) {
+      issued = { ...ctx.offlineCards.issue(p, opts), reused: false }; // explicit reissue, or the very first card
+    } else if (current) {
+      issued = current;
+    } else {
+      // A revoked or expired card is never replaced silently: the patient must reissue.
+      const last = ctx.offlineCards.latest(p.id);
+      throw new HttpError(409, last?.revokedAt
+        ? 'Your emergency card was revoked. Reissue it to print a new card.'
+        : 'Your emergency card has expired. Reissue it to print a new card.');
+    }
     const bundle = await buildOfflineCardBundle(issued, { baseUrl: appBaseUrl(req), formattedCode: ctx.codeByPatient.get(p.id)?.formattedCode });
-    return { ...bundle, reused: issued.reused };
+    return { ...bundle, reused: issued.reused, stale: p.cardStale };
   }
 
   function parseFilters(url: URL): TimelineFilterOptions {
@@ -404,6 +419,27 @@ export function createPortalApi(ctx: PortalContext) {
 
       if (method === 'GET' && sub === 'offline-cards') {
         return { cards: ctx.offlineCards.list(patient.id) };
+      }
+
+      // Lost or stolen card: revoke it. Scanners learn of it on their next sync (cardStatus 'revoked').
+      if (method === 'POST' && sub === 'offline-card/revoke') {
+        const body = await readBody(req);
+        const reason = text(body.reason, 200);
+        if (reason.length < 2) throw new HttpError(400, 'Give a short reason, for example "lost"');
+        const current = ctx.offlineCards.getCurrent(patient.id);
+        if (!current) throw new HttpError(404, 'There is no current card to revoke');
+        const revoked = ctx.offlineCards.revoke(patient.id, current.version, reason);
+        return { revokedVersion: revoked.version, revokedAt: revoked.revokedAt, needsReissue: true };
+      }
+
+      // Patient flags a record as possibly wrong. The record is not changed; its author is notified.
+      if (method === 'POST' && (m = sub.match(/^records\/([^/]+)\/flag$/))) {
+        const body = await readBody(req);
+        try {
+          return { flag: ctx.recordFlags.flag(patient.id, decodeURIComponent(m[1]), text(body.note, 1000)) };
+        } catch (err: any) {
+          throw new HttpError(/not found/i.test(err.message) ? 404 : 400, err.message);
+        }
       }
 
       if (method === 'GET' && sub === 'timeline') {
@@ -608,6 +644,10 @@ export function createPortalApi(ctx: PortalContext) {
     const clinician = currentClinician(req);
 
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
+
+    if (method === 'GET' && pathname === '/api/clinician/record-flags') {
+      return { flags: ctx.recordFlags.forAuthor(clinician.id) };
+    }
 
     if (method === 'POST' && pathname === '/api/clinician/device-key') {
       const body = await readBody(req);
