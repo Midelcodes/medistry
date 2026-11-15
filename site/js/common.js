@@ -36,6 +36,7 @@
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     const session = Session.get();
     if (options.auth !== false && session && session.token) headers.Authorization = `Bearer ${session.token}`;
+    if (options.token) headers.Authorization = `Bearer ${options.token}`; // patient or proxy session (patient portal)
     let res;
     try {
       res = await fetch(path, {
@@ -98,6 +99,7 @@
   async function bindClinicianLogin(opts) {
     const select = $(opts.select);
     const totp = $(opts.totp);
+    const password = opts.password ? $(opts.password) : null; // required outside demo mode
     const errorEl = $(opts.error);
     try {
       const { clinicians } = await api('/api/clinicians', { auth: false });
@@ -128,10 +130,11 @@
         const extra = opts.extraBody ? await opts.extraBody() : {};
         const data = await api('/api/clinician/login', {
           method: 'POST', auth: false,
-          body: { clinicianId: select.value, totp: totp.value.trim(), ...extra },
+          body: { clinicianId: select.value, totp: totp.value.trim(), ...(password && password.value ? { password: password.value } : {}), ...extra },
         });
         Session.set({ token: data.token, clinician: data.clinician });
         totp.value = '';
+        if (password) password.value = '';
         await opts.onSignedIn(data.clinician, data);
       } catch (err) {
         setError(errorEl, err.message);

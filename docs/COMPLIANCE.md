@@ -115,3 +115,8 @@ These are open. None of them has been done.
 - [ ] Design cross-deployment trust for cross-border scans: distribution of other countries' public keys to
       scanners, and routing of scan events to the issuing country.
 - [ ] Verify the section references and the controls in the mapping table above.
+- [ ] Confirm, per country, the age at which a minor controls their own health record and whether a guardian may
+      keep any access after it (the code ends guardian control at 18, as specified; `src/lib/auth/proxies.ts`).
+- [ ] Decide how a facility verifies a guardian's authority and a patient's identity before linking a phone number
+      (the endpoints record who did it; the checks themselves are a facility process).
+- [ ] Choose a production SMS provider and review the content of sign-in and notification messages.

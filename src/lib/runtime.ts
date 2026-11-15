@@ -18,6 +18,11 @@ import { RecordFlagStore } from './clinical/recordFlags.ts';
 import { ConsentLifecycleManager } from './consent/consentManager.ts';
 import { PatientAccessLogManager } from './audit/accessLogManager.ts';
 import { seedClinicalRecords } from './site/seedClinical.ts';
+import { AccountStore } from './auth/accounts.ts';
+import { PatientAuthService } from './auth/patientAuth.ts';
+import { StaffService } from './auth/staff.ts';
+import { ProxyService } from './auth/proxies.ts';
+import { appSecret, DEMO_MODE } from './security/config.ts';
 import type { PatientEntity } from './patient/profile.ts';
 import type { Persistence, Snapshot } from './data/repositories.ts';
 
@@ -37,6 +42,10 @@ export interface Runtime {
   accessLogManager: PatientAccessLogManager;
   recordFlags: RecordFlagStore;
   offlineScans: OfflineScanService;
+  accounts: AccountStore;
+  patientAuth: PatientAuthService;
+  staff: StaffService;
+  proxies: ProxyService;
   persistence: Persistence;
 }
 
@@ -76,9 +85,24 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
   const offlineScans = new OfflineScanService({
     auditManager, dispatcher, cardStore: offlineCardStore, clinicians: seedData.clinicians, facilities: seedData.facilities, patientsById,
   });
+  // Sign-in (Phase 12). Session tokens, sign-in codes and demo TOTP secrets are keyed from JWT_SECRET.
+  const serverKey = appSecret('JWT_SECRET');
+  const accounts = new AccountStore();
+  const patientAuth = new PatientAuthService({ accounts, dispatcher, auditManager, serverKey });
+  const proxies = new ProxyService({ accounts, auditManager, dispatcher, patientsById });
+  const staff = new StaffService({
+    accounts, auditManager, dispatcher, clinicians: seedData.clinicians, facilities: seedData.facilities, serverKey, demoMode: DEMO_MODE,
+    onClinicianAdded: (c) => {
+      for (const id of [c.id, c.userId]) {
+        timelineEngine.registerClinician(id, `${c.fullName} (${c.specialty})`);
+        accessLogManager.registerClinician(id, `${c.fullName} (${c.specialty})`);
+      }
+    },
+  });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
+    accounts, patientAuth, staff, proxies,
   };
 }
 
@@ -93,10 +117,20 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.offlineScans.persistence = persistence;
   rt.recordFlags.persistence = persistence;
   rt.consoleProvider.persistence = persistence;
+  connectAuth(rt, persistence);
+  rt.staff.ensureDemoAdmins();
+  rt.staff.bootstrapPlatformAdmin();
   const cardSync = new CardContentSync({ patientsById: rt.patientsById, dispatcher: rt.dispatcher, auditManager: rt.auditManager });
   cardSync.persistence = persistence;
   rt.clinicalStore.onFinalRecord((event) => cardSync.handle(event));
   return { ...rt, persistence };
+}
+
+function connectAuth(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): void {
+  rt.accounts.persistence = persistence;
+  rt.proxies.persistence = persistence;
+  rt.staff.persistence = persistence;
+  rt.patientAuth.persistence = persistence;
 }
 
 /** Fresh synthetic dataset, written through `persistence` as it is created. */
@@ -149,6 +183,13 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.offlineScans.hydrate(snapshot.scanEvents, snapshot.deviceKeys);
   rt.recordFlags.hydrate(snapshot.recordFlags);
   rt.consoleProvider.hydrate(snapshot.notifications);
+  rt.accounts.hydrate(snapshot.userAccounts || []);
+  for (const patient of snapshot.patients) {
+    const account = rt.accounts.get(patient.userId);
+    if (account && account.role === 'PATIENT') account.patientId = patient.id; // the link is Patient.userId
+  }
+  rt.proxies.hydrate(snapshot.proxyRelationships || []);
+  rt.staff.hydrate(snapshot.credentialDocuments || []);
   return attach(rt, persistence);
 }
 

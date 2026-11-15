@@ -20,6 +20,7 @@ function recordingPersistence() {
     record: new Map<string, any>(), audit: [] as any[], consentRequest: new Map<string, any>(), consentGrant: new Map<string, any>(),
     grant: new Map<string, any>(), dispute: new Map<string, any>(), card: new Map<string, any>(), scan: new Map<string, any>(),
     deviceKey: new Map<string, any>(), flag: new Map<string, any>(), notification: [] as any[],
+    user: new Map<string, any>(), proxy: new Map<string, any>(), document: new Map<string, any>(),
   };
   let refusedAudit = 0;
   const p: Persistence & { tables: typeof t; refusedAudit: () => number } = {
@@ -40,6 +41,9 @@ function recordingPersistence() {
     saveScanEvent: (e) => t.scan.set(e.id, M.scanEventToRow(e)),
     saveDeviceKey: (k) => t.deviceKey.set(`${k.clinicianId}:${k.thumbprint}`, M.deviceKeyToRow(k)),
     saveNotification: (n) => t.notification.push(M.notificationToRow(n)),
+    saveUserAccount: (a) => { const { user, facilityAdmin } = M.userAccountToRows(a); t.user.set(a.id, { ...user, facilityAdmin }); },
+    saveProxyRelationship: (r) => t.proxy.set(r.id, M.proxyToRow(r)),
+    saveCredentialDocument: (d) => t.document.set(d.id, M.credentialDocumentToRow(d)),
     appendAudit: (e) => {
       // Same continuity rule as the Prisma repository's locked append.
       const last = t.audit.at(-1);
@@ -57,6 +61,8 @@ function recordingPersistence() {
         offlineCards: [...t.card.values()].map(M.rowToOfflineCard), scanEvents: [...t.scan.values()].map(M.rowToScanEvent),
         deviceKeys: [...t.deviceKey.values()].map(M.rowToDeviceKey), recordFlags: [...t.flag.values()].map(M.rowToRecordFlag),
         notifications: t.notification.map(M.rowToNotification),
+        userAccounts: [...t.user.values()].map(M.rowToUserAccount), proxyRelationships: [...t.proxy.values()].map(M.rowToProxy),
+        credentialDocuments: [...t.document.values()].map(M.rowToCredentialDocument),
       };
     },
     flush: async () => {}, close: async () => {},
@@ -96,7 +102,17 @@ async function doEverything(rt: Runtime) {
   const ticket = rt.accessLogManager.disputeAccess(patient.id, audit.id, 'Synthetic dispute reason');
   patient.preferredLocale = 'sw';
   rt.persistence.savePatient(patient);
-  return { patient, card, grant, bg, ev, flag, ticket };
+
+  // Phase 12: a phone sign-in linked to the patient, a proxy invitation, a self-registered clinician.
+  const info = { ipAddress: '127.0.0.1', userAgent: 't' };
+  const account = rt.patientAuth.linkPatient(patient, '+2348000000101', { ...info, adminId: 'admin-platform-demo' });
+  const proxy = await rt.proxies.invite(patient, account, { phone: '+2348000000102', relationship: 'caregiver', scopes: ['view'] }, info);
+  const registered = await rt.staff.registerClinician({
+    name: 'Dr. Synthetic Registrant', phone: '+2348000000103', email: 'registrant@example.org', countryCode: 'NG', licenceNumber: 'MDCN/R/77001',
+    facilityRegistryCode: 'fac-luth-001', password: 'synthetic-password-1', licenceExpiresOn: '2099-01-01',
+    licenceDocument: { filename: 'licence.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.4 Synthetic licence bytes').toString('base64') },
+  }, info);
+  return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered };
 }
 
 describe('Storage selection', () => {
@@ -145,6 +161,10 @@ describe('Write-through and restart (recording repository, same rows as Postgres
     same(b.accessLogManager.getOpenDisputes(), a.accessLogManager.getOpenDisputes(), 'disputes');
     same(b.consoleProvider.sentPushLogs, a.consoleProvider.sentPushLogs, 'notifications');
     same(b.consoleProvider.sentSmsLogs, a.consoleProvider.sentSmsLogs, 'SMS log');
+    same(b.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), a.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), 'user accounts');
+    same(b.proxies.forPatient(did.patient.id), a.proxies.forPatient(did.patient.id), 'proxy relationships');
+    same(b.seedData.clinicians.find((c) => c.id === did.registered.clinician.id), did.registered.clinician, 'registered clinician');
+    assert.strictEqual(b.staff.listForReview(b.accounts.get('admin-platform-demo')!, 'PENDING')[0].hasLicenceDocument, true, 'licence document');
     for (const id of a.patientsById.keys()) {
       same(b.clinicalStore.getLatestFinalRecords(id, 'Encounter'), a.clinicalStore.getLatestFinalRecords(id, 'Encounter'), 'records');
     }
@@ -168,7 +188,8 @@ describe('Write-through and restart (recording repository, same rows as Postgres
       ...did.patient.allergies.map((a) => a.substance), ...did.patient.chronicConditions, ...did.patient.activeMedications.map((m) => m.medicationName),
       rt.codeByPatient.get(did.patient.id)!.formattedCode, rt.codeByPatient.get(did.patient.id)!.rawCode, did.card.token,
       'Synthetic follow-up reason', 'Synthetic break-glass detail', 'Synthetic second opinion', 'Synthetic scan detail',
-      'Synthetic flag note', 'Synthetic dispute reason', 'One-time code'];
+      'Synthetic flag note', 'Synthetic dispute reason', 'One-time code',
+      '+2348000000101', '+2348000000102', '+2348000000103', 'registrant@example.org', 'synthetic-password-1', 'Synthetic licence bytes', 'licence.pdf'];
     for (const b of banned) assert.ok(!plain.includes(b), `stored rows must not contain ${String(b).slice(0, 30)}`);
   });
 

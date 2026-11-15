@@ -29,6 +29,9 @@ export interface ActorContext {
   // Nurses and records officers: their registration is checked outside this module.
   // TODO: which register verifies nurses and records officers is not decided; keep this a configurable check.
   isVerifiedStaff?: boolean;
+  // Set when a proxy (parent, guardian, caregiver...) acts for the patient: userId is then the patient's id and
+  // proxyUserId the proxy's own user id. Proxies never edit clinical content.
+  proxyUserId?: string;
 }
 
 export interface ConsentContext {
@@ -55,6 +58,7 @@ export interface PolicyEvaluationRequest {
   actor: ActorContext;
   action: PolicyAction;
   targetPatientId?: string;
+  targetFacilityId?: string; // CLINICIAN_VERIFY: the facility the clinician claims
   requestedResourceType?: string;
   activeConsent?: ConsentContext | null;
   activeEmergencyGrant?: EmergencyGrantContext | null;
@@ -71,15 +75,18 @@ export interface PolicyDecision {
  * Fails closed (deny by default).
  */
 export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision {
-  const { actor, action, targetPatientId, requestedResourceType, activeConsent, activeEmergencyGrant } = request;
+  const { actor, action, targetPatientId, targetFacilityId, requestedResourceType, activeConsent, activeEmergencyGrant } = request;
 
   // 1. Unauthenticated or malformed actors are denied immediately
   if (!actor || !actor.userId || !actor.role) {
     return { allowed: false, statusCode: 401, reason: 'Authentication required' };
   }
 
-  // 2. PATIENT role authorizations
+  // 2. PATIENT role authorizations (the patient, or a proxy acting for them)
   if (actor.role === 'PATIENT') {
+    if (actor.proxyUserId && (action === 'PATIENT_WRITE_RECORD' || action === 'PATIENT_DRAFT_RECORD')) {
+      return { allowed: false, statusCode: 403, reason: 'Proxies can never edit clinical content' };
+    }
     if (action === 'PATIENT_READ_RECORD' || action === 'PATIENT_EXPORT_ALL' || action === 'AUDIT_LOG_READ') {
       if (targetPatientId && targetPatientId === actor.userId) {
         return { allowed: true, statusCode: 200, reason: 'Patient accessing own health record' };
@@ -128,6 +135,12 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
 
   // 4. FACILITY_ADMIN role authorizations
   if (actor.role === 'FACILITY_ADMIN') {
+    if (action === 'CLINICIAN_VERIFY') {
+      if (actor.facilityId && targetFacilityId === actor.facilityId) {
+        return { allowed: true, statusCode: 200, reason: 'Facility admin reviewing a clinician who claims their facility' };
+      }
+      return { allowed: false, statusCode: 403, reason: 'Facility admins may only review clinicians who claim their own facility' };
+    }
     if (action === 'CONSENT_REQUEST') {
       return { allowed: true, statusCode: 200, reason: 'Facility admin may initiate record transfer requests' };
     }

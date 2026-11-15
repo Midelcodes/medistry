@@ -10,11 +10,15 @@
       <div class="content-container">
         <div id="cl-signin" class="panel narrow-panel">
           <h2 class="panel-title">Clinician sign-in</h2>
-          <p class="panel-sub">Only clinicians whose licence has been checked can sign in. Five wrong codes lock the account.</p>
+          <p class="panel-sub">Password, then your authenticator code. Five failed attempts lock the account.</p>
           <form id="cl-login-form" class="stack-form">
             <div class="form-group">
               <label for="cl-clinician">Clinician</label>
               <select id="cl-clinician" required></select>
+            </div>
+            <div class="form-group">
+              <label for="cl-password">Password (not needed for the demo clinicians)</label>
+              <input id="cl-password" type="password" autocomplete="current-password" maxlength="200">
             </div>
             <div class="form-group">
               <label for="cl-totp">Authenticator code (6 digits)</label>

@@ -50,11 +50,53 @@ export interface UploadResult {
   sizeBytes: number;
 }
 
+/** A clinician's licence document, validated, scanned and encrypted like a clinical upload. */
+export interface CredentialDocument {
+  id: string;
+  clinicianId: string;
+  filename: string;
+  mimeType: string;
+  sha256: string;
+  sizeBytes: number;
+  encryptedPayload: string; // AES-256-GCM (encryptField) of the base64 bytes
+  uploadedAt: string;
+}
+
 export class SecureDocumentManager {
   private scanner: IVirusScannerAdapter;
 
   constructor(scanner: IVirusScannerAdapter = new StandardVirusScannerAdapter()) {
     this.scanner = scanner;
+  }
+
+  /** Size, type and malware checks shared by every upload. Throws on failure. */
+  private async check(mimeType: string, buffer: Buffer): Promise<void> {
+    if (buffer.length > MAX_FILE_SIZE_BYTES) {
+      throw new Error(`File size exceeds 10MB limit (received ${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+    }
+    if (!ALLOWED_MIME_TYPES.includes(String(mimeType).toLowerCase())) {
+      throw new Error(`Unsupported file type '${mimeType}'. Allowed formats: PDF, JPEG, PNG.`);
+    }
+    const scanResult = await this.scanner.scanBuffer(buffer);
+    if (!scanResult.clean) {
+      throw new Error(`SECURITY ALERT: Virus or malicious payload detected (${scanResult.threatName}). File rejected.`);
+    }
+  }
+
+  /** Stores a clinician's licence document (self-registration): same checks, encrypted at rest. */
+  async processCredentialDocument(input: { filename: string; mimeType: string; buffer: Buffer }, clinicianId: string): Promise<CredentialDocument> {
+    if (!input.buffer.length) throw new Error('The licence document is empty');
+    await this.check(input.mimeType, input.buffer);
+    return {
+      id: crypto.randomUUID(),
+      clinicianId,
+      filename: String(input.filename || 'licence').replace(/[^\w. -]/g, '_').slice(0, 120),
+      mimeType: input.mimeType.toLowerCase(),
+      sha256: crypto.createHash('sha256').update(input.buffer).digest('hex'),
+      sizeBytes: input.buffer.length,
+      encryptedPayload: encryptField(input.buffer.toString('base64')),
+      uploadedAt: new Date().toISOString(),
+    };
   }
 
   /**

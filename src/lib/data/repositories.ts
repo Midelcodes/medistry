@@ -23,6 +23,10 @@ import type { OfflineScanEventRecord } from '../emergency/offlineScans.ts';
 import type { RecordFlag } from '../clinical/recordFlags.ts';
 import type { DisputeTicket } from '../audit/accessLogManager.ts';
 import type { SeedClinician, SeedFacility } from '../../../prisma/seed.ts';
+import type { AccountRepo, UserAccount } from '../auth/accounts.ts';
+import type { ProxyRepo, ProxyRelationship } from '../auth/proxies.ts';
+import type { CredentialDocumentRepo } from '../auth/staff.ts';
+import type { CredentialDocument } from '../clinical/fileUpload.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -80,10 +84,15 @@ export interface Snapshot {
   deviceKeys: DeviceKeyEntity[];
   recordFlags: RecordFlag[];
   notifications: NotificationEntity[];
+  // Phase 12 (absent in snapshots written before it: treated as empty)
+  userAccounts?: UserAccount[];
+  proxyRelationships?: ProxyRelationship[];
+  credentialDocuments?: CredentialDocument[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
-  ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo {
+  ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
+  AccountRepo, ProxyRepo, CredentialDocumentRepo {
   readonly mode: StorageMode;
   /** The stored working set, or null for memory storage. */
   loadSnapshot(): Promise<Snapshot | null>;

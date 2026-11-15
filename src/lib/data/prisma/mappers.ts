@@ -19,6 +19,9 @@ import type { RecordFlag } from '../../clinical/recordFlags.ts';
 import type { DisputeTicket } from '../../audit/accessLogManager.ts';
 import type { SeedClinician, SeedFacility } from '../../../../prisma/seed.ts';
 import type { DeviceKeyEntity, EmergencyCodeEntity, NotificationEntity } from '../repositories.ts';
+import type { UserAccount } from '../../auth/accounts.ts';
+import type { ProxyRelationship } from '../../auth/proxies.ts';
+import type { CredentialDocument } from '../../clinical/fileUpload.ts';
 
 type Row = Record<string, any>;
 
@@ -48,11 +51,59 @@ export const clinicianToRows = (c: SeedClinician) => ({
   clinician: {
     id: c.id, userId: c.userId, fullName: c.fullName, licenseNumber: c.licenseNumber, countryCode: c.countryCode,
     specialty: c.specialty, facilityId: c.facilityId, status: c.status,
+    registeredAt: date(c.registeredAt), registryMatch: c.registryMatch ?? null, licenceExpiresOn: c.licenceExpiresOn ?? null,
+    licenceReminderSentFor: c.licenceReminderSentFor ?? null, verifiedBy: c.reviewedBy ?? null, verifiedAt: date(c.reviewedAt),
+    encryptedRejectionReason: enc(c.rejectionReason),
   },
 });
-export const rowToClinician = (r: Row): SeedClinician => ({
+export const rowToClinician = (r: Row): SeedClinician => clean({
   id: r.id, userId: r.userId, fullName: r.fullName, licenseNumber: r.licenseNumber, countryCode: r.countryCode,
   specialty: r.specialty, facilityId: r.facilityId, status: r.status,
+  registeredAt: iso(r.registeredAt), registryMatch: r.registryMatch ?? undefined, licenceExpiresOn: r.licenceExpiresOn ?? undefined,
+  licenceReminderSentFor: r.licenceReminderSentFor ?? undefined, reviewedBy: r.verifiedBy ?? undefined, reviewedAt: iso(r.verifiedAt),
+  rejectionReason: dec(r.encryptedRejectionReason),
+});
+
+// ---------- User account (sign-in credentials; Phase 12) ----------
+// Phone and email arrive already encrypted (AccountStore); the TOTP secret is encrypted; the password is a scrypt hash.
+export const userAccountToRows = (a: UserAccount) => ({
+  user: {
+    id: a.id, role: a.role, countryCode: a.countryCode, hasAccount: true, displayName: a.displayName ?? null,
+    phoneHash: a.phoneHash ?? null, encryptedPhone: a.encryptedPhone ?? null, emailHash: a.emailHash ?? null, encryptedEmail: a.encryptedEmail ?? null,
+    passwordHash: a.passwordHash ?? null, twoFactorSecret: a.encryptedTotpSecret ?? null, twoFactorEnabled: a.totpEnabled,
+    failedSignIns: a.failedSignIns, lockedUntil: date(a.lockedUntil), sessionsNotBefore: date(a.sessionsNotBefore),
+    lastSignInAt: date(a.lastSignInAt), createdAt: new Date(a.createdAt),
+  },
+  facilityAdmin: a.role === 'FACILITY_ADMIN' && a.facilityId ? { userId: a.id, facilityId: a.facilityId } : null,
+});
+export const rowToUserAccount = (r: Row): UserAccount => clean({
+  id: r.id, role: r.role, countryCode: r.countryCode, displayName: r.displayName ?? undefined, facilityId: r.facilityAdmin?.facilityId ?? undefined,
+  phoneHash: r.phoneHash ?? undefined, encryptedPhone: r.encryptedPhone ?? undefined, emailHash: r.emailHash ?? undefined, encryptedEmail: r.encryptedEmail ?? undefined,
+  passwordHash: r.passwordHash ?? undefined, encryptedTotpSecret: r.twoFactorSecret ?? undefined, totpEnabled: !!r.twoFactorEnabled,
+  failedSignIns: r.failedSignIns ?? 0, lockedUntil: iso(r.lockedUntil), sessionsNotBefore: iso(r.sessionsNotBefore),
+  lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
+} as UserAccount);
+
+// ---------- Proxy relationship ----------
+export const proxyToRow = (x: ProxyRelationship): Row => ({
+  id: x.id, patientId: x.patientId, proxyUserId: x.proxyUserId, relationship: x.relationship, scopes: x.scopes,
+  validFrom: new Date(x.validFrom), validUntil: date(x.validUntil), verifiedBy: x.verifiedBy ?? null, status: x.status,
+  managesMinorAccount: x.managesMinorAccount, createdAt: new Date(x.createdAt), endedAt: date(x.endedAt), endReason: x.endReason ?? null,
+});
+export const rowToProxy = (r: Row): ProxyRelationship => clean({
+  id: r.id, patientId: r.patientId, proxyUserId: r.proxyUserId, relationship: r.relationship, scopes: r.scopes,
+  validFrom: iso(r.validFrom)!, validUntil: iso(r.validUntil), verifiedBy: r.verifiedBy ?? undefined, status: r.status,
+  managesMinorAccount: r.managesMinorAccount, createdAt: iso(r.createdAt)!, endedAt: iso(r.endedAt), endReason: r.endReason ?? undefined,
+} as ProxyRelationship);
+
+// ---------- Clinician licence document ----------
+export const credentialDocumentToRow = (d: CredentialDocument): Row => ({
+  id: d.id, clinicianId: d.clinicianId, encryptedFilename: encryptField(d.filename), mimeType: d.mimeType, sha256: d.sha256,
+  sizeBytes: d.sizeBytes, encryptedPayload: d.encryptedPayload, uploadedAt: new Date(d.uploadedAt),
+});
+export const rowToCredentialDocument = (r: Row): CredentialDocument => ({
+  id: r.id, clinicianId: r.clinicianId, filename: decryptField(r.encryptedFilename), mimeType: r.mimeType, sha256: r.sha256,
+  sizeBytes: r.sizeBytes, encryptedPayload: r.encryptedPayload, uploadedAt: iso(r.uploadedAt)!,
 });
 
 // ---------- Patient (+ user) ----------

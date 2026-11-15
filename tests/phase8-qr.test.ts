@@ -223,11 +223,12 @@ describe('3. Card API', () => {
     assert.strictEqual(stats.auditChainValid, true);
   });
 
-  test('With DEMO_MODE=0 and no authorisation, the card endpoints return 403/404 like the other generators', async () => {
+  test('With DEMO_MODE=0 and no session, the card endpoints return 401 (404 for the demo generators)', async () => {
+    // Phase 12: patient routes need a patient session outside demo mode (was a blanket 403 before sign-in existed).
     const get = await fetch(`http://localhost:${LOCKED_PORT}/api/patients/${seedPatientId}/offline-card`);
-    assert.strictEqual(get.status, 403);
+    assert.strictEqual(get.status, 401);
     const post = await fetch(`http://localhost:${LOCKED_PORT}/api/patients/${seedPatientId}/offline-card`, { method: 'POST' });
-    assert.strictEqual(post.status, 403);
+    assert.strictEqual(post.status, 401);
     for (const path of ['/emergency/offline-card', '/emergency/wallet-card', '/emergency/wristband']) {
       assert.strictEqual((await fetch(`http://localhost:${LOCKED_PORT}${path}?patientId=${seedPatientId}`)).status, 404, path);
     }

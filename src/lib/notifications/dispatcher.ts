@@ -13,9 +13,12 @@ export interface NotificationMessage {
   body: string;
 }
 
+/** storedAs: what the message log keeps instead of the text (for one-time codes, which must never be stored). */
+export interface SendOptions { storedAs?: string }
+
 export interface INotificationProvider {
-  sendSms(toPhone: string, message: string): Promise<boolean>;
-  sendEmail(toEmail: string, subject: string, body: string): Promise<boolean>;
+  sendSms(toPhone: string, message: string, opts?: SendOptions): Promise<boolean>;
+  sendEmail(toEmail: string, subject: string, body: string, opts?: SendOptions): Promise<boolean>;
   sendPush(toUserId: string, title: string, body: string): Promise<boolean>;
 }
 
@@ -39,18 +42,20 @@ export class ConsoleNotificationProvider implements INotificationProvider {
     }
   }
 
-  async sendSms(toPhone: string, message: string): Promise<boolean> {
+  // The in-memory logs stand in for the recipient's handset or inbox (tests read codes from them); the
+  // stored log keeps opts.storedAs instead of the text when one is given.
+  async sendSms(toPhone: string, message: string, opts: SendOptions = {}): Promise<boolean> {
     if (this.forceSmsFailure) {
       throw new Error('Telecom gateway timeout (MTN/Airtel SMS outage simulated)');
     }
     this.sentSmsLogs.push({ to: toPhone, message });
-    this.persistence?.saveNotification({ channel: 'SMS', to: toPhone, body: message });
+    this.persistence?.saveNotification({ channel: 'SMS', to: toPhone, body: opts.storedAs ?? message });
     return true;
   }
 
-  async sendEmail(toEmail: string, subject: string, body: string): Promise<boolean> {
+  async sendEmail(toEmail: string, subject: string, body: string, opts: SendOptions = {}): Promise<boolean> {
     this.sentEmailLogs.push({ to: toEmail, subject, body });
-    this.persistence?.saveNotification({ channel: 'EMAIL', to: toEmail, title: subject, body });
+    this.persistence?.saveNotification({ channel: 'EMAIL', to: toEmail, title: subject, body: opts.storedAs ?? body });
     return true;
   }
 
@@ -136,6 +141,26 @@ export class NotificationDispatcher {
     }
 
     return results;
+  }
+
+  /** One SMS (sign-in codes, account notices). Failures are reported, never thrown. */
+  async sendSms(toPhone: string, message: string, opts?: SendOptions): Promise<DispatchedAlertResult> {
+    try {
+      await this.provider.sendSms(toPhone, message, opts);
+      return { recipient: toPhone, channel: 'SMS', status: 'DELIVERED' };
+    } catch (err: any) {
+      return { recipient: toPhone, channel: 'SMS', status: 'FAILED', error: err?.message };
+    }
+  }
+
+  /** One email (recovery codes, account notices). Failures are reported, never thrown. */
+  async sendEmail(toEmail: string, subject: string, body: string, opts?: SendOptions): Promise<DispatchedAlertResult> {
+    try {
+      await this.provider.sendEmail(toEmail, subject, body, opts);
+      return { recipient: toEmail, channel: 'EMAIL', status: 'DELIVERED' };
+    } catch (err: any) {
+      return { recipient: toEmail, channel: 'EMAIL', status: 'FAILED', error: err?.message };
+    }
   }
 
   /** Push notification to one user (patient or clinician). Failures are reported, never thrown. */

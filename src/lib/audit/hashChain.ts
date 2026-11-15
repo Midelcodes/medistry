@@ -5,6 +5,7 @@
 
 import crypto from 'node:crypto';
 import type { AuditRepo } from '../data/repositories.ts';
+import { applyActing } from './actingContext.ts';
 
 export interface AuditRecordPayload {
   sequenceNumber: number;
@@ -90,7 +91,7 @@ export class AuditChainManager {
     const timestamp = rawPayload.timestamp || new Date().toISOString();
 
     const fullPayload: AuditRecordPayload = {
-      ...rawPayload,
+      ...applyActing(rawPayload), // a proxy's request is recorded under the proxy's identity
       sequenceNumber,
       timestamp,
     };

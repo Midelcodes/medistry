@@ -8,7 +8,27 @@
 
     <section class="page-section">
       <div class="content-container">
-        <div class="demo-banner">
+        <div id="patient-signin" class="panel narrow-panel" hidden>
+          <h2 class="panel-title">Sign in with your phone</h2>
+          <p class="panel-sub">We send a 6-digit code by SMS. It expires in 5 minutes. Never share it.</p>
+          <form id="ps-phone-form" class="stack-form">
+            <div class="form-group">
+              <label for="ps-phone">Phone number (international format)</label>
+              <input id="ps-phone" type="tel" autocomplete="tel" placeholder="+234 800 000 0000" maxlength="20" required>
+            </div>
+            <button type="submit" class="btn btn-pill-primary"><span>Send code</span></button>
+          </form>
+          <form id="ps-code-form" class="stack-form" hidden>
+            <div class="form-group">
+              <label for="ps-code">Code from the SMS (6 digits)</label>
+              <input id="ps-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+            </div>
+            <button type="submit" class="btn btn-pill-primary"><span>Sign in</span></button>
+          </form>
+          <p class="form-error" id="ps-error" role="alert" hidden></p>
+        </div>
+
+        <div class="demo-banner" id="demo-banner">
           <strong>Demo environment.</strong> There is no patient sign-in here. Pick one of the synthetic patients to explore their portal.
         </div>
 
@@ -16,6 +36,7 @@
           <label for="patient-picker">Viewing as</label>
           <select id="patient-picker" aria-label="Choose a synthetic patient"></select>
           <span class="chain-chip" id="chain-chip" title="Result of verifying the audit hash chain">Checking audit chain&hellip;</span>
+          <button type="button" class="btn-text-link" id="ps-signout" hidden>Sign out</button>
         </div>
 
         <div id="portal" hidden>

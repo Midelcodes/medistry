@@ -9,7 +9,7 @@
 ## Status and known limits
 
 - **Storage.** By default `npm start` seeds synthetic data in memory and resets on restart. With `STORAGE=postgres` and `DATABASE_URL`, every change is written through to PostgreSQL (Prisma) and the server rebuilds its state from the database at start-up (see "PostgreSQL storage" below). One app instance per database: the in-memory working set is not shared between instances. Redis is not used yet.
-- **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. Set `DEMO_MODE=0` to disable them. Patient sign-in is not implemented, so do not run real data on this build.
+- **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. With `DEMO_MODE=0` the directory and generators are off, the patient portal needs a phone sign-in, clinicians and admins need a password and an authenticator, and the demo authenticator endpoint is gone (see "Sign-in" below). The legal and operational items in [docs/COMPLIANCE.md](docs/COMPLIANCE.md) section 7 still stand before any real data.
 - **Secrets.** `JWT_SECRET` and `FIELD_ENCRYPTION_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used. `OFFLINE_CARD_PRIVATE_KEY` (ES256 card signing key) comes from `node scripts/gen-card-key.mjs`; without it a random per-process key is used in dev, and the server refuses to start in production with `DEMO_MODE=0`.
 - **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
 - Hosting is outside Nigeria for the public demo; the data is synthetic. A real deployment needs an in-country region.
@@ -56,6 +56,33 @@
 queue management and in-country referral routing, plus a LangGraph demo. See [`mcp/README.md`](mcp/README.md).
 
 ---
+
+## Sign-in
+
+All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient picker and the demo authenticator stay.
+
+- **Patients (phone first).** `POST /api/auth/patient/otp/request {phone}` sends a 6-digit code by SMS (through the
+  notification dispatcher); `POST /api/auth/patient/otp/verify {phone, otp}` returns a session token (Bearer). Codes
+  live 5 minutes, allow 5 attempts, and are kept only as an HMAC; requests are limited per phone number and per IP
+  (`OTP_MAX_PER_PHONE`, `OTP_MAX_PER_IP`). A facility admin links a phone number to a patient record after an
+  identity check (`POST /api/admin/patients/:id/account`). Optional recovery email; recovery = code to that email,
+  then a code to the new phone number, then every old session is revoked. Sign-ins, recovery, lockouts and
+  session revocations are audited. `/api/patients/:id/...` needs the patient, or a proxy whose scopes cover the route.
+- **Clinicians.** Password (scrypt, N=2^15, r=8, p=1, 16-byte salt, compared with `timingSafeEqual`) then TOTP;
+  five failures lock the account (`ACCOUNT_LOCKOUT_SECONDS`). `POST /api/clinician/register` checks the licence
+  format against the country registry, stores the licence document encrypted, and returns an `otpauth://` URI
+  and QR code for the authenticator app. New clinicians are `PENDING`: they can sign in but cannot break glass,
+  get an offline scanner pass, or read records until a facility admin of the claimed facility (or a platform
+  admin) approves them (`/api/admin/clinicians/:id/approve|reject`). A reminder goes out `LICENCE_REMINDER_DAYS`
+  before a recorded licence expiry date.
+- **Admins.** The first platform admin comes from `PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD_HASH` and
+  `PLATFORM_ADMIN_TOTP_SECRET` (generate with `node --experimental-strip-types scripts/admin-credentials.ts`); it
+  creates facility admins (`POST /api/admin/facility-admins`).
+- **Guardians and proxies.** A patient invites a proxy (parent, guardian, caregiver, spouse, other) with scopes
+  `view`, `manage-card`, `approve-consent`. Proxies sign in with their own phone; every audit entry of their
+  requests reads "Proxy X (relationship) on behalf of patient Y". No scope edits clinical content. A facility
+  admin records a minor's parent or guardian, who manages the account until the patient's 18th birthday (from the
+  encrypted date of birth); control then passes to the patient and both are notified.
 
 ## Offline emergency card
 

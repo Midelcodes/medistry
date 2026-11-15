@@ -44,6 +44,14 @@ export interface SeedClinician {
   specialty: string;
   facilityId: string;
   status: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
+  // Self-registration (Phase 12). Absent for seeded clinicians.
+  licenceExpiresOn?: string;       // YYYY-MM-DD, if the clinician gave one
+  licenceReminderSentFor?: string; // the expiry date a re-verification reminder was last sent for
+  registeredAt?: string;
+  registryMatch?: boolean;         // found in the registry adapter's list at registration
+  reviewedBy?: string;             // admin user id
+  reviewedAt?: string;
+  rejectionReason?: string;
 }
 
 /** A synthetic past visit, written to the clinical store as a doctor-signed FHIR Encounter. */

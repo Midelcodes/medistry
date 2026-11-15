@@ -75,6 +75,19 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
 
 ---
 
+## 2b. Sign-in (Phase 12)
+
+| Threat | Mitigation | Limit |
+|---|---|---|
+| Guessing an SMS code | 6 digits, 5 minutes, 5 attempts per code, then dead; requests limited per phone and per IP; verification limited per IP | An attacker with many IPs and phone numbers can still spread attempts; SMS itself can be intercepted (SIM swap) |
+| SIM swap / number recycling | Recovery needs the recovery email and the new phone; the old number gets an SMS when the account moves | A patient without a recovery email has no self-service recovery; clinic staff must re-link the number after an identity check |
+| Stolen session token | Bearer only for API calls (no CSRF with cookies); 15-minute tokens; sign out everywhere; recovery revokes all sessions | Tokens are not bound to a device |
+| Code stored in logs or database | Only HMAC(server key, challenge id + code) is kept; the message log stores "code not stored" instead of the text | The SMS provider sees the code (unavoidable) |
+| Password guessing (clinicians, admins) | scrypt N=2^15; five failures lock the account; TOTP required as well | Lockout can be used to lock a clinician out on purpose (denial of service) |
+| Fake clinician registration | Licence format check, encrypted licence document, PENDING until an admin of the claimed facility approves; PENDING has no clinical permissions | Format checks do not prove a licence is real; admins must check the register |
+| Proxy overreach | Scopes per route; proxies act under their own identity and every audit entry names them; no scope edits clinical content | A proxy with `approve-consent` can share the record; patients choose scopes |
+| Guardian keeps control of an adult | Ends automatically on the 18th birthday (checked on every request and daily) | The age of majority is a product setting (18), not checked per jurisdiction |
+
 ## 3. Offline Emergency Card (Signed QR), Clinician Passes and Offline Scans
 
 Scope: the signed QR emergency card, the offline scanner at `/s`, clinician passes, device keys and

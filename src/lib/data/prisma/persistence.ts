@@ -125,6 +125,22 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
       const row = M.notificationToRow(n);
       enqueue('notification', () => client.notificationLog.create({ data: row as any }));
     },
+    saveUserAccount: (a) => {
+      const { user, facilityAdmin } = M.userAccountToRows(a);
+      const { id: _id, createdAt: _created, ...update } = user;
+      enqueue(`account ${a.id}`, () => client.$transaction(async (tx) => {
+        await tx.user.upsert({ where: { id: a.id }, create: user as any, update: update as any });
+        if (facilityAdmin) await tx.facilityAdmin.upsert({ where: { userId: a.id }, create: facilityAdmin, update: { facilityId: facilityAdmin.facilityId } });
+      }, TX_OPTIONS));
+    },
+    saveProxyRelationship: (r) => {
+      const row = M.proxyToRow(r);
+      enqueue(`proxy ${r.id}`, () => client.proxyRelationship.upsert({ where: { id: r.id }, create: row as any, update: row as any }));
+    },
+    saveCredentialDocument: (d) => {
+      const row = M.credentialDocumentToRow(d);
+      enqueue(`licence document ${d.id}`, () => client.clinicianLicenceDocument.upsert({ where: { id: d.id }, create: row as any, update: row as any }));
+    },
     appendAudit: (e) => enqueue(`audit ${e.sequenceNumber}`, () => appendContinuing(e)),
 
     async appendComputed(payload) {
@@ -144,7 +160,8 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
     },
 
     async loadSnapshot(): Promise<Snapshot> {
-      const [facilities, clinicians, patients, codes, records, audit, requests, grants, eGrants, disputes, cards, scans, keys, flags, notes] = await Promise.all([
+      const [facilities, clinicians, patients, codes, records, audit, requests, grants, eGrants, disputes, cards, scans, keys, flags, notes,
+        users, proxies, documents] = await Promise.all([
         client.facility.findMany(), client.clinician.findMany(), client.patient.findMany(), client.emergencyCode.findMany(),
         client.patientRecord.findMany({ orderBy: [{ createdAt: 'asc' }, { versionId: 'asc' }] }),
         client.auditLog.findMany({ orderBy: { sequenceNumber: 'asc' } }),
@@ -152,6 +169,8 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
         client.emergencyAccessGrant.findMany({ orderBy: { grantedAt: 'asc' } }), client.disputeTicket.findMany(),
         client.offlineCard.findMany({ orderBy: { version: 'asc' } }), client.offlineScanEvent.findMany(),
         client.clinicianDeviceKey.findMany(), client.recordFlag.findMany(), client.notificationLog.findMany({ orderBy: { createdAt: 'asc' } }),
+        client.user.findMany({ where: { hasAccount: true }, include: { facilityAdmin: true } }),
+        client.proxyRelationship.findMany({ orderBy: { createdAt: 'asc' } }), client.clinicianLicenceDocument.findMany(),
       ]);
       // Keep the seed's order (Nigerian facilities and clinicians first) for the demo pickers.
       // Ties (same millisecond) break by id, so the order is deterministic.
@@ -173,6 +192,9 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
         deviceKeys: keys.map(M.rowToDeviceKey),
         recordFlags: flags.map(M.rowToRecordFlag),
         notifications: notes.map(M.rowToNotification),
+        userAccounts: users.map(M.rowToUserAccount),
+        proxyRelationships: proxies.map(M.rowToProxy),
+        credentialDocuments: documents.map(M.rowToCredentialDocument),
       };
     },
 
@@ -180,6 +202,7 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
       await persistence.flush();
       await client.$transaction([
         client.notificationLog.deleteMany(), client.disputeTicket.deleteMany(), client.recordFlag.deleteMany(),
+        client.proxyRelationship.deleteMany(), client.clinicianLicenceDocument.deleteMany(),
         client.offlineScanEvent.deleteMany(), client.clinicianDeviceKey.deleteMany(), client.offlineCard.deleteMany(),
         client.emergencyAccessGrant.deleteMany(), client.consentGrant.deleteMany(), client.consentRequest.deleteMany(),
         client.patientRecord.deleteMany(), client.emergencyCode.deleteMany(), client.patient.deleteMany(),

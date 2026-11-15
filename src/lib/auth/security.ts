@@ -22,37 +22,97 @@ export interface SessionTokenPayload {
  * High-security password hashing using Scrypt (Argon2-comparable memory-hard KDF).
  * N=32768, r=8, p=1, keylen=64.
  */
+/** Minimum password length for clinicians and admins. */
+export const MIN_PASSWORD_LENGTH = 12;
+
+export const SCRYPT_PARAMS = { N: 32768, r: 8, p: 1 } as const; // N = 2^15
+const SCRYPT_MAXMEM = 128 * 1024 * 1024; // scrypt needs 128 * N * r bytes = 32 MiB at these parameters
+
 export function hashPassword(password: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16).toString('hex');
-    crypto.scrypt(password, salt, 64, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, derivedKey) => {
+    const salt = crypto.randomBytes(16).toString('hex'); // 16-byte salt
+    const { N, r, p } = SCRYPT_PARAMS;
+    crypto.scrypt(password, salt, 64, { N, r, p, maxmem: SCRYPT_MAXMEM }, (err, derivedKey) => {
       if (err) return reject(err);
-      resolve(`scrypt$N=16384,r=8,p=1$${salt}$${derivedKey.toString('hex')}`);
+      resolve(`scrypt$N=${N},r=${r},p=${p}$${salt}$${derivedKey.toString('hex')}`);
     });
   });
 }
 
 /**
- * Constant-time password verification.
+ * Constant-time password verification. Reads the scrypt parameters stored with the hash (so hashes made with
+ * older parameters still verify), within safe bounds, and compares with timingSafeEqual.
  */
 export function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      const parts = storedHash.split('$');
-      if (parts.length !== 4 || parts[0] !== 'scrypt') {
-        return resolve(false);
-      }
+      const parts = String(storedHash).split('$');
+      if (parts.length !== 4 || parts[0] !== 'scrypt') return resolve(false);
+      const params = Object.fromEntries(parts[1].split(',').map((kv) => kv.split('=')).map(([k, v]) => [k, Number(v)]));
+      const N = params.N, r = params.r, p = params.p;
+      const bounded = Number.isInteger(N) && N >= 16384 && N <= 131072 && (N & (N - 1)) === 0 && r === 8 && p === 1;
+      if (!bounded) return resolve(false);
       const salt = parts[2];
       const originalKey = Buffer.from(parts[3], 'hex');
-
-      crypto.scrypt(password, salt, originalKey.length, { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, derivedKey) => {
-        if (err) return resolve(false);
+      if (!salt || originalKey.length < 32) return resolve(false);
+      crypto.scrypt(password, salt, originalKey.length, { N, r, p, maxmem: SCRYPT_MAXMEM }, (err, derivedKey) => {
+        if (err || derivedKey.length !== originalKey.length) return resolve(false);
         resolve(crypto.timingSafeEqual(originalKey, derivedKey));
       });
     } catch {
       resolve(false);
     }
   });
+}
+
+/** RFC 4648 base32 (A-Z, 2-7, no padding): the encoding authenticator apps expect in otpauth URIs. */
+export function toRfc4648Base32(bytes: Buffer): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let out = '';
+  let bits = 0;
+  let value = 0;
+  for (const b of bytes) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += alphabet[(value << (5 - bits)) & 31];
+  return out;
+}
+
+/** Decodes RFC 4648 base32 (case-insensitive, padding and spaces ignored). Throws on other characters. */
+export function fromRfc4648Base32(input: string): Buffer {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = input.toUpperCase().replace(/[\s=]/g, '');
+  const out: number[] = [];
+  let bits = 0;
+  let value = 0;
+  for (const ch of clean) {
+    const v = alphabet.indexOf(ch);
+    if (v < 0) throw new Error('Invalid base32 secret');
+    value = ((value << 5) | v) & 0xffff;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+/**
+ * A new TOTP secret for enrolment. `secret` is in this module's internal (Crockford) base32 for verifyTotp;
+ * `otpauthUri` carries the SAME bytes in RFC 4648 base32, which authenticator apps require.
+ */
+export function createTotpEnrolment(accountLabel: string, issuer = 'Medistry'): { secret: string; otpauthUri: string } {
+  const bytes = crypto.randomBytes(20);
+  const secret = generateTotpSecret(20, bytes);
+  const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(accountLabel)}`;
+  const otpauthUri = `otpauth://totp/${label}?secret=${toRfc4648Base32(bytes)}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+  return { secret, otpauthUri };
 }
 
 /**

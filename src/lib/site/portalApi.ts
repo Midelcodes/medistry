@@ -20,7 +20,13 @@ import type { PatientAccessLogManager } from '../audit/accessLogManager.ts';
 import type { EmergencyBreakGlassEngine } from '../emergency/breakGlassEngine.ts';
 import type { ConsoleNotificationProvider } from '../notifications/dispatcher.ts';
 import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockford.ts';
-import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
+import { generateTotp } from '../auth/security.ts';
+import { SessionManager, type SessionClaims } from '../auth/sessions.ts';
+import { maskPhone, type AccountStore, type UserAccount } from '../auth/accounts.ts';
+import type { PatientAuthService, RequestInfo } from '../auth/patientAuth.ts';
+import type { StaffService } from '../auth/staff.ts';
+import type { ProxyService, ProxyScope } from '../auth/proxies.ts';
+import { currentActing, runActing, type ProxyActing } from '../audit/actingContext.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -50,6 +56,11 @@ export interface PortalContext {
   recordFlags: RecordFlagStore;
   persistence?: Persistence;
   dataDir: string;
+  // Sign-in (Phase 12)
+  accounts: AccountStore;
+  patientAuth: PatientAuthService;
+  staff: StaffService;
+  proxies: ProxyService;
 }
 
 class HttpError extends Error {
@@ -60,8 +71,6 @@ class HttpError extends Error {
   }
 }
 
-const MAX_LOGIN_ATTEMPTS = parseInt(process.env.MAX_EMERGENCY_ATTEMPTS || '5', 10);
-const LOCKOUT_MS = parseInt(process.env.EMERGENCY_LOCKOUT_SECONDS || '3600', 10) * 1000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 export function createPortalApi(ctx: PortalContext) {
@@ -78,29 +87,17 @@ export function createPortalApi(ctx: PortalContext) {
   const limit = (limiter: SlidingWindowRateLimiter, req: http.IncomingMessage) => {
     if (!limiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many requests. Wait a minute and try again.');
   };
+  const registerLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 60_000, maxRequests: 5 }); // clinician self-registration
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
-  const hmac = (label: string) => crypto.createHmac('sha256', serverKey).update(label).digest();
-  const totpSecrets = new Map<string, string>();
-  for (const c of ctx.seedData.clinicians) totpSecrets.set(c.id, generateTotpSecret(20, hmac(`totp:${c.id}`)));
-
-  function issueToken(clinicianId: string): string {
-    const payload = Buffer.from(JSON.stringify({ c: clinicianId, e: Date.now() + SESSION_TTL_MS })).toString('base64url');
-    return `${payload}.${hmac(`session:${payload}`).toString('base64url')}`;
-  }
-  function readToken(token: string): string | null {
-    const [payload, sig] = token.split('.');
-    if (!payload || !sig) return null;
-    const expected = hmac(`session:${payload}`);
-    const given = Buffer.from(sig, 'base64url');
-    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
-    try {
-      const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
-      return typeof data.c === 'string' && data.e > Date.now() ? data.c : null;
-    } catch {
-      return null;
-    }
-  }
-  const loginFailures = new Map<string, { count: number; lockedUntil: number }>();
+  // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
+  // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
+  const sessions = new SessionManager(serverKey);
+  sessions.notBefore = (kind, subject) => {
+    const userId = kind === 'clinician' ? ctx.seedData.clinicians.find((c) => c.id === subject)?.userId : subject;
+    const at = userId ? ctx.accounts.get(userId)?.sessionsNotBefore : undefined;
+    return at ? Date.parse(at) : undefined;
+  };
+  const requestInfo = (req: http.IncomingMessage): RequestInfo => ({ ipAddress: clientIp(req), userAgent: String(req.headers['user-agent'] || '').slice(0, 200) });
   const contactMessages: Array<Record<string, string>> = [];
 
   // ---- Helpers ----
@@ -139,23 +136,30 @@ export function createPortalApi(ctx: PortalContext) {
     return patient;
   }
 
-  const patientActor = (p: PatientEntity): ActorContext => ({ userId: p.id, role: 'PATIENT' });
+  // A proxy acts for the patient: the actor is the patient's record, the proxy's own id rides along (and the
+  // audit log records the proxy, see audit/actingContext.ts).
+  const patientActor = (p: PatientEntity): ActorContext => ({ userId: p.id, role: 'PATIENT', proxyUserId: currentActing()?.proxyUserId });
 
   function facilityName(id: string): string {
     return ctx.seedData.facilities.find((f) => f.id === id)?.name || id;
   }
 
   function clinicianFromToken(token: string): SeedClinician | null {
-    const clinicianId = token ? readToken(token) : null;
-    return clinicianId ? ctx.seedData.clinicians.find((c) => c.id === clinicianId) ?? null : null;
+    const claims = token ? sessions.read(token) : null;
+    if (claims?.kind !== 'clinician') return null;
+    const clinician = ctx.seedData.clinicians.find((c) => c.id === claims.subject);
+    return clinician && clinician.status !== 'REJECTED' && clinician.status !== 'SUSPENDED' ? clinician : null;
   }
+
+  const bearerOf = (req: http.IncomingMessage) => {
+    const header = req.headers.authorization || '';
+    return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  };
 
   // API calls authenticate with the Bearer header only. The session cookie (HttpOnly, SameSite=Strict)
   // is accepted solely for read-only page navigations such as the emergency summary.
   function authenticate(req: http.IncomingMessage, opts: { allowCookie?: boolean } = {}): SeedClinician | null {
-    const header = req.headers.authorization || '';
-    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-    const fromHeader = clinicianFromToken(bearer);
+    const fromHeader = clinicianFromToken(bearerOf(req));
     if (fromHeader || !opts.allowCookie) return fromHeader;
     return clinicianFromToken(parseCookies(req.headers.cookie)[SESSION_COOKIE] || '');
   }
@@ -164,6 +168,45 @@ export function createPortalApi(ctx: PortalContext) {
     const clinician = authenticate(req);
     if (!clinician) throw new HttpError(401, 'Clinician sign-in required');
     return clinician;
+  }
+
+  /** PENDING clinicians can sign in and see their status, nothing clinical. */
+  function requireVerified(c: SeedClinician): void {
+    if (c.status !== 'VERIFIED') throw new HttpError(403, 'Your clinician account is pending verification by a facility admin. Clinical features are disabled until then.');
+  }
+
+  /** A signed-in patient or proxy (Bearer only), with its token claims. */
+  function personSession(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } | null {
+    const claims = sessions.read(bearerOf(req));
+    if (claims?.kind !== 'person') return null;
+    const account = ctx.accounts.get(claims.subject);
+    return account && (account.role === 'PATIENT' || account.role === 'PROXY') ? { account, claims } : null;
+  }
+
+  function currentPerson(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } {
+    const s = personSession(req);
+    if (!s) throw new HttpError(401, 'Sign in with your phone number first');
+    return s;
+  }
+
+  function adminSession(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } {
+    const claims = sessions.read(bearerOf(req));
+    const account = claims?.kind === 'admin' ? ctx.accounts.get(claims.subject) : undefined;
+    if (!claims || !account || (account.role !== 'FACILITY_ADMIN' && account.role !== 'PLATFORM_ADMIN')) throw new HttpError(401, 'Admin sign-in required');
+    return { account, claims };
+  }
+
+  function publicAccount(a: UserAccount) {
+    const phone = ctx.accounts.phoneOf(a);
+    return { id: a.id, role: a.role, patientId: a.patientId || null, phone: phone ? maskPhone(phone) : null, hasRecoveryEmail: !!a.emailHash };
+  }
+
+  /** The proxy scope a patient-portal route needs. */
+  function scopeFor(method: string, sub: string): ProxyScope {
+    if (/^proxies(\/|$)/.test(sub)) return 'view'; // inviting and revoking are checked by the proxy service
+    if (method !== 'GET' && /^(consents\/|disputes$|records\/[^/]+\/flag$)/.test(sub)) return 'approve-consent';
+    if (method === 'GET' && sub !== 'offline-card') return 'view';
+    return 'manage-card';
   }
 
   function sessionCookie(req: http.IncomingMessage, token: string, maxAgeSeconds: number): string {
@@ -176,7 +219,7 @@ export function createPortalApi(ctx: PortalContext) {
     role: 'DOCTOR',
     clinicianId: c.id,
     facilityId: c.facilityId,
-    isVerifiedClinician: true,
+    isVerifiedClinician: c.status === 'VERIFIED',
   });
 
   function publicClinician(c: SeedClinician) {
@@ -187,6 +230,7 @@ export function createPortalApi(ctx: PortalContext) {
       specialty: c.specialty,
       facilityId: c.facilityId,
       facilityName: facilityName(c.facilityId),
+      status: c.status,
     };
   }
 
@@ -295,7 +339,7 @@ export function createPortalApi(ctx: PortalContext) {
       sendJson(res, 200, result, extraHeaders.get(req));
       return true;
     } catch (err: any) {
-      const status = err instanceof HttpError ? err.status : /Forbidden|Unauthorized/.test(err?.message || '') ? 403 : 400;
+      const status = typeof err?.status === 'number' ? err.status : /Forbidden|Unauthorized/.test(err?.message || '') ? 403 : 400;
       sendJson(res, status, { error: err?.message || 'Request failed' });
       return true;
     }
@@ -361,246 +405,288 @@ export function createPortalApi(ctx: PortalContext) {
       return { valid: true, requiresLogin: gate.requiresLogin, publicCard: gate.publicCard || null };
     }
 
-    // ---------- Patient portal (demo: synthetic patient selected on the page) ----------
+    // ---------- Patient portal ----------
+    // DEMO_MODE=1: a synthetic patient is picked on the page (no sign-in), unless a session is presented.
+    // DEMO_MODE=0: a patient or proxy session is required; the patient themself, or a proxy whose scopes cover
+    // the route. A proxy's request runs in an acting context, so its audit entries name the proxy.
     if ((m = pathname.match(/^\/api\/patients\/([^/]+)(?:\/(.*))?$/)) && m[1] !== '') {
-      if (!DEMO_MODE) throw new HttpError(403, 'The patient portal needs patient authentication, which is not implemented. It is disabled outside demo mode.');
+      const person = personSession(req);
+      if (!DEMO_MODE && !person) throw new HttpError(401, 'Sign in with your phone number first');
       const patient = ctx.patientsById.get(m[1]);
       const sub = m[2] || '';
-      if (!patient) throw new HttpError(404, 'Patient not found');
+      if (!patient) throw new HttpError(person || DEMO_MODE ? 404 : 401, 'Patient not found');
+      const acting = person ? ctx.proxies.authorize(person.account, patient, scopeFor(method, sub)) : null;
+      return runActing(acting, () => patientRoute(req, method, sub, url, patient, person?.account ?? null, acting));
+    }
 
-      if (method === 'GET' && sub === '') return { patient: profileOf(patient) };
+    return clinicianAndAdminRoute(req, method, pathname, url);
+  }
 
-      if (method === 'PATCH' && sub === 'settings') {
-        limit(cardLimiter, req);
-        // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
-        const body = await readBody(req);
-        const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis', 'preferredLocale'];
-        const keys = Object.keys(body || {});
-        const extra = keys.filter((k) => !allowed.includes(k));
-        if (extra.length) throw new HttpError(400, `Only visibility settings can be changed here. Not allowed: ${extra.join(', ')}`);
-        if (!keys.length) throw new HttpError(400, `Provide at least one of: ${allowed.join(', ')}`);
-        if (body.publicEmergencyOptIn !== undefined && typeof body.publicEmergencyOptIn !== 'boolean') {
-          throw new HttpError(400, 'publicEmergencyOptIn must be true or false');
-        }
-        if (body.preferredLocale !== undefined && !SUPPORTED_LOCALES.includes(body.preferredLocale)) {
-          throw new HttpError(400, `preferredLocale must be one of ${SUPPORTED_LOCALES.join(', ')}`);
-        }
-        if (body.preferredLocale !== undefined) patient.preferredLocale = body.preferredLocale;
-        const { preferredLocale: _ignored, ...cardBody } = body;
-        let card: ReturnType<typeof validateCardSelection>;
-        try {
-          card = validateCardSelection(patient, cardBody);
-        } catch (err: any) {
-          throw new HttpError(400, err.message);
-        }
-        if (Object.keys(card).length) {
-          const decision = evaluatePolicy({ actor: patientActor(patient), action: 'PATIENT_SET_CARD_VISIBILITY', targetPatientId: patient.id });
-          if (!decision.allowed) throw new HttpError(decision.statusCode, decision.reason);
-        }
+  async function patientRoute(req: http.IncomingMessage, method: string, sub: string, url: URL, patient: PatientEntity,
+    viewer: UserAccount | null, acting: ProxyActing | null): Promise<unknown | undefined> {
+    let m: RegExpMatchArray | null;
+    if (method === 'GET' && sub === '') return { patient: profileOf(patient), actingAs: acting ? { proxyUserId: acting.proxyUserId, relationship: acting.relationship } : null };
 
-        if (typeof body.publicEmergencyOptIn === 'boolean') {
-          patient.publicEmergencyOptIn = body.publicEmergencyOptIn;
-          ctx.auditManager.appendEntry({
-            actorId: patient.id,
-            subjectId: patient.id,
-            action: 'PATIENT_UPDATED_PUBLIC_BADGE_SETTING',
-            accessType: 'NORMAL_CONSENT',
-            ipAddress: '127.0.0.1',
-            userAgent: 'PatientPortal/1.0',
-            reason: `Public emergency badge ${patient.publicEmergencyOptIn ? 'enabled' : 'disabled'} by patient`,
-          });
-        }
-        if (Object.keys(card).length) {
-          if (card.cardConditions) patient.cardConditions = card.cardConditions;
-          if (card.cardMedicationIds) patient.cardMedicationIds = card.cardMedicationIds;
-          if (card.cardIncludeRecentDiagnosis !== undefined) patient.cardIncludeRecentDiagnosis = card.cardIncludeRecentDiagnosis;
-          // Counts only: the audit trail must not list sensitive conditions or medications.
-          ctx.auditManager.appendEntry({
-            actorId: patient.id,
-            subjectId: patient.id,
-            action: 'PATIENT_UPDATED_CARD_VISIBILITY',
-            accessType: 'NORMAL_CONSENT',
-            ipAddress: '127.0.0.1',
-            userAgent: 'PatientPortal/1.0',
-            reason: `Card shows ${patient.cardConditions.length} condition(s), ${patient.cardMedicationIds.length} medication(s), recent diagnosis ${patient.cardIncludeRecentDiagnosis ? 'on' : 'off'}`,
-          });
-        }
-        patient.updatedAt = new Date().toISOString();
-        ctx.persistence?.savePatient(patient);
-        return { patient: profileOf(patient) };
+    // Proxies: list, invite (the patient, or a minor's managing guardian), revoke.
+    if (sub === 'proxies' || sub.startsWith('proxies/')) {
+      if (!viewer) throw new HttpError(401, 'Sign in with your phone number first');
+      if (method === 'GET' && sub === 'proxies') {
+        const all = ctx.proxies.forPatient(patient.id);
+        return { proxies: acting ? all.filter((r) => r.proxyUserId === viewer.id) : all };
       }
-
-      // GET: current card (issues the first one if none is valid). POST: reissue, superseding the old card.
-      if ((method === 'GET' || method === 'POST') && sub === 'offline-card') {
-        limit(cardLimiter, req);
-        return offlineCardFor(patient, req, method === 'POST', url.searchParams.get('lang'));
+      if (method === 'POST' && sub === 'proxies') {
+        return { proxy: await ctx.proxies.invite(patient, viewer, await readBody(req), requestInfo(req)) };
       }
-
-      if (method === 'GET' && sub === 'offline-cards') {
-        limit(cardLimiter, req);
-        return { cards: ctx.offlineCards.list(patient.id) };
+      if (method === 'POST' && (m = sub.match(/^proxies\/([^/]+)\/revoke$/))) {
+        const r = ctx.proxies.get(decodeURIComponent(m[1]));
+        if (!r || r.patientId !== patient.id) throw new HttpError(404, 'Proxy relationship not found');
+        return { proxy: ctx.proxies.revoke(viewer, r.id, requestInfo(req)) };
       }
-
-      // Lost or stolen card: revoke it. Scanners learn of it on their next sync (cardStatus 'revoked').
-      if (method === 'POST' && sub === 'offline-card/revoke') {
-        limit(cardLimiter, req);
-        const body = await readBody(req);
-        const reason = text(body.reason, 200);
-        if (reason.length < 2) throw new HttpError(400, 'Give a short reason, for example "lost"');
-        const current = ctx.offlineCards.getCurrent(patient.id);
-        if (!current) throw new HttpError(404, 'There is no current card to revoke');
-        const revoked = ctx.offlineCards.revoke(patient.id, current.version, reason);
-        return { revokedVersion: revoked.version, revokedAt: revoked.revokedAt, needsReissue: true };
-      }
-
-      // Patient flags a record as possibly wrong. The record is not changed; its author is notified.
-      if (method === 'POST' && (m = sub.match(/^records\/([^/]+)\/flag$/))) {
-        limit(cardLimiter, req);
-        const body = await readBody(req);
-        try {
-          return { flag: ctx.recordFlags.flag(patient.id, decodeURIComponent(m[1]), text(body.note, 1000)) };
-        } catch (err: any) {
-          throw new HttpError(/not found/i.test(err.message) ? 404 : 400, err.message);
-        }
-      }
-
-      if (method === 'GET' && sub === 'timeline') {
-        const items = ctx.timelineEngine.getTimeline(patient.id, patientActor(patient), { filters: parseFilters(url) });
-        return { timeline: slimTimeline(items) };
-      }
-
-      if (method === 'GET' && sub === 'access-log') {
-        return { logs: ctx.accessLogManager.getPatientAccessLog(patient.id) };
-      }
-
-      if (method === 'POST' && sub === 'disputes') {
-        const body = await readBody(req);
-        const reason = text(body.reason, 500);
-        if (reason.length < 5) throw new HttpError(400, 'Please describe why you are disputing this access');
-        // Accepts an audit entry id, or an offline scan event id (offlineScanEventId, or passed as auditLogId).
-        const requested = String(body.offlineScanEventId || body.auditLogId || '');
-        const scan = ctx.offlineScans.getEvent(requested);
-        if (body.offlineScanEventId && (!scan || scan.patientId !== patient.id)) throw new HttpError(404, 'Offline scan event not found');
-        const auditLogId = scan && scan.patientId === patient.id ? scan.auditLogId : requested;
-        const ticket = ctx.accessLogManager.disputeAccess(patient.id, auditLogId, reason);
-        if (scan && scan.patientId === patient.id) ctx.offlineScans.markDisputed(scan.id);
-        return { ticket, offlineScanEventId: scan && scan.patientId === patient.id ? scan.id : undefined };
-      }
-
-      if (method === 'GET' && sub === 'consents') {
-        return {
-          pending: ctx.consentManager.getPendingRequests(patient.id).filter((r) => r.status === 'PENDING'),
-          grants: ctx.consentManager.getPatientConsents(patient.id).map((g) => ({
-            id: g.id,
-            clinicianName: g.requestingClinicianName,
-            facilityName: g.requestingFacilityName,
-            scopes: g.scopes,
-            reason: g.clinicalReason,
-            createdAt: g.createdAt,
-            validUntil: new Date(g.validUntil).toISOString(),
-            isRevoked: g.isRevoked,
-            revokedAt: g.revokedAt,
-            status: g.isRevoked ? 'REVOKED' : new Date() > new Date(g.validUntil) ? 'EXPIRED' : 'ACTIVE',
-          })),
-        };
-      }
-
-      if (method === 'POST' && (m = sub.match(/^consents\/requests\/([^/]+)\/(approve|reject)$/))) {
-        if (m[2] === 'approve') {
-          const body = await readBody(req);
-          const customHours = Number(body.customHours);
-          const grant = ctx.consentManager.approveInApp(
-            m[1],
-            patient.id,
-            Number.isFinite(customHours) && customHours > 0 && customHours <= 24 * 365 ? { customHours } : undefined
-          );
-          return { grantId: grant.id };
-        }
-        ctx.consentManager.rejectRequest(m[1], patient.id);
-        return { success: true };
-      }
-
-      if (method === 'POST' && (m = sub.match(/^consents\/grants\/([^/]+)\/revoke$/))) {
-        const body = await readBody(req);
-        const grant = ctx.consentManager.revokeConsent(patient.id, m[1], text(body.reason, 200) || 'Patient revoked consent');
-        return { grantId: grant.id, status: 'REVOKED' };
-      }
-
-      if (method === 'POST' && sub === 'emergency-code/reissue') {
-        const old = ctx.codeByPatient.get(patient.id);
-        const fresh = generatePatientUniqueCode('medistry.health');
-        if (old) {
-          ctx.patientsByCode.delete(old.rawCode);
-          ctx.patientsByCode.delete(old.formattedCode);
-        }
-        ctx.patientsByCode.set(fresh.rawCode, patient);
-        ctx.patientsByCode.set(fresh.formattedCode, patient);
-        ctx.codeByPatient.set(patient.id, { rawCode: fresh.rawCode, formattedCode: fresh.formattedCode });
-        patient.activeEmergencyCodeId = fresh.rawCode;
-        const now = new Date().toISOString();
-        if (old) ctx.persistence?.saveEmergencyCode({ patientId: patient.id, ...old, isActive: false, createdAt: now, revokedAt: now, revocationReason: 'Reissued by patient' });
-        ctx.persistence?.saveEmergencyCode({ patientId: patient.id, rawCode: fresh.rawCode, formattedCode: fresh.formattedCode, isActive: true, createdAt: now });
-        ctx.persistence?.savePatient(patient);
-        ctx.auditManager.appendEntry({
-          actorId: patient.id,
-          subjectId: patient.id,
-          action: 'EMERGENCY_CODE_REVOKED_AND_REISSUED',
-          accessType: 'NORMAL_CONSENT',
-          ipAddress: '127.0.0.1',
-          userAgent: 'PatientPortal/1.0',
-          reason: 'Patient reissued emergency code. The previous code no longer works.',
-        });
-        return { emergencyCode: fresh.formattedCode };
-      }
-
-      if (method === 'GET' && sub === 'notifications') {
-        const phones = new Set(patient.emergencyContacts.map((c) => c.phone));
-        const demo = decryptPatientDemographics(patient);
-        const sms = ctx.notifications.sentSmsLogs
-          .filter((s) => phones.has(s.to))
-          .map((s) => ({ channel: 'SMS to emergency contact', to: s.to, message: s.message }));
-        const push = ctx.notifications.sentPushLogs
-          .filter((p) => p.toUserId === patient.id)
-          .map((p) => ({ channel: 'Push to you', to: `${demo.firstName} ${demo.lastName}`, message: `${p.title}: ${p.body}` }));
-        return { notifications: [...push, ...sms].reverse().slice(0, 50) };
-      }
-
       return undefined;
     }
 
+    if (method === 'PATCH' && sub === 'settings') {
+      limit(cardLimiter, req);
+      // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
+      const body = await readBody(req);
+      const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis', 'preferredLocale'];
+      const keys = Object.keys(body || {});
+      const extra = keys.filter((k) => !allowed.includes(k));
+      if (extra.length) throw new HttpError(400, `Only visibility settings can be changed here. Not allowed: ${extra.join(', ')}`);
+      if (!keys.length) throw new HttpError(400, `Provide at least one of: ${allowed.join(', ')}`);
+      if (body.publicEmergencyOptIn !== undefined && typeof body.publicEmergencyOptIn !== 'boolean') {
+        throw new HttpError(400, 'publicEmergencyOptIn must be true or false');
+      }
+      if (body.preferredLocale !== undefined && !SUPPORTED_LOCALES.includes(body.preferredLocale)) {
+        throw new HttpError(400, `preferredLocale must be one of ${SUPPORTED_LOCALES.join(', ')}`);
+      }
+      if (body.preferredLocale !== undefined) patient.preferredLocale = body.preferredLocale;
+      const { preferredLocale: _ignored, ...cardBody } = body;
+      let card: ReturnType<typeof validateCardSelection>;
+      try {
+        card = validateCardSelection(patient, cardBody);
+      } catch (err: any) {
+        throw new HttpError(400, err.message);
+      }
+      if (Object.keys(card).length) {
+        const decision = evaluatePolicy({ actor: patientActor(patient), action: 'PATIENT_SET_CARD_VISIBILITY', targetPatientId: patient.id });
+        if (!decision.allowed) throw new HttpError(decision.statusCode, decision.reason);
+      }
+
+      if (typeof body.publicEmergencyOptIn === 'boolean') {
+        patient.publicEmergencyOptIn = body.publicEmergencyOptIn;
+        ctx.auditManager.appendEntry({
+          actorId: patient.id,
+          subjectId: patient.id,
+          action: 'PATIENT_UPDATED_PUBLIC_BADGE_SETTING',
+          accessType: 'NORMAL_CONSENT',
+          ipAddress: '127.0.0.1',
+          userAgent: 'PatientPortal/1.0',
+          reason: `Public emergency badge ${patient.publicEmergencyOptIn ? 'enabled' : 'disabled'} by patient`,
+        });
+      }
+      if (Object.keys(card).length) {
+        if (card.cardConditions) patient.cardConditions = card.cardConditions;
+        if (card.cardMedicationIds) patient.cardMedicationIds = card.cardMedicationIds;
+        if (card.cardIncludeRecentDiagnosis !== undefined) patient.cardIncludeRecentDiagnosis = card.cardIncludeRecentDiagnosis;
+        // Counts only: the audit trail must not list sensitive conditions or medications.
+        ctx.auditManager.appendEntry({
+          actorId: patient.id,
+          subjectId: patient.id,
+          action: 'PATIENT_UPDATED_CARD_VISIBILITY',
+          accessType: 'NORMAL_CONSENT',
+          ipAddress: '127.0.0.1',
+          userAgent: 'PatientPortal/1.0',
+          reason: `Card shows ${patient.cardConditions.length} condition(s), ${patient.cardMedicationIds.length} medication(s), recent diagnosis ${patient.cardIncludeRecentDiagnosis ? 'on' : 'off'}`,
+        });
+      }
+      patient.updatedAt = new Date().toISOString();
+      ctx.persistence?.savePatient(patient);
+      return { patient: profileOf(patient) };
+    }
+
+    // GET: current card (issues the first one if none is valid). POST: reissue, superseding the old card.
+    if ((method === 'GET' || method === 'POST') && sub === 'offline-card') {
+      limit(cardLimiter, req);
+      return offlineCardFor(patient, req, method === 'POST', url.searchParams.get('lang'));
+    }
+
+    if (method === 'GET' && sub === 'offline-cards') {
+      limit(cardLimiter, req);
+      return { cards: ctx.offlineCards.list(patient.id) };
+    }
+
+    // Lost or stolen card: revoke it. Scanners learn of it on their next sync (cardStatus 'revoked').
+    if (method === 'POST' && sub === 'offline-card/revoke') {
+      limit(cardLimiter, req);
+      const body = await readBody(req);
+      const reason = text(body.reason, 200);
+      if (reason.length < 2) throw new HttpError(400, 'Give a short reason, for example "lost"');
+      const current = ctx.offlineCards.getCurrent(patient.id);
+      if (!current) throw new HttpError(404, 'There is no current card to revoke');
+      const revoked = ctx.offlineCards.revoke(patient.id, current.version, reason);
+      return { revokedVersion: revoked.version, revokedAt: revoked.revokedAt, needsReissue: true };
+    }
+
+    // Patient flags a record as possibly wrong. The record is not changed; its author is notified.
+    if (method === 'POST' && (m = sub.match(/^records\/([^/]+)\/flag$/))) {
+      limit(cardLimiter, req);
+      const body = await readBody(req);
+      try {
+        return { flag: ctx.recordFlags.flag(patient.id, decodeURIComponent(m[1]), text(body.note, 1000)) };
+      } catch (err: any) {
+        throw new HttpError(/not found/i.test(err.message) ? 404 : 400, err.message);
+      }
+    }
+
+    if (method === 'GET' && sub === 'timeline') {
+      const items = ctx.timelineEngine.getTimeline(patient.id, patientActor(patient), { filters: parseFilters(url) });
+      return { timeline: slimTimeline(items) };
+    }
+
+    if (method === 'GET' && sub === 'access-log') {
+      return { logs: ctx.accessLogManager.getPatientAccessLog(patient.id) };
+    }
+
+    if (method === 'POST' && sub === 'disputes') {
+      const body = await readBody(req);
+      const reason = text(body.reason, 500);
+      if (reason.length < 5) throw new HttpError(400, 'Please describe why you are disputing this access');
+      // Accepts an audit entry id, or an offline scan event id (offlineScanEventId, or passed as auditLogId).
+      const requested = String(body.offlineScanEventId || body.auditLogId || '');
+      const scan = ctx.offlineScans.getEvent(requested);
+      if (body.offlineScanEventId && (!scan || scan.patientId !== patient.id)) throw new HttpError(404, 'Offline scan event not found');
+      const auditLogId = scan && scan.patientId === patient.id ? scan.auditLogId : requested;
+      const ticket = ctx.accessLogManager.disputeAccess(patient.id, auditLogId, reason);
+      if (scan && scan.patientId === patient.id) ctx.offlineScans.markDisputed(scan.id);
+      return { ticket, offlineScanEventId: scan && scan.patientId === patient.id ? scan.id : undefined };
+    }
+
+    if (method === 'GET' && sub === 'consents') {
+      return {
+        pending: ctx.consentManager.getPendingRequests(patient.id).filter((r) => r.status === 'PENDING'),
+        grants: ctx.consentManager.getPatientConsents(patient.id).map((g) => ({
+          id: g.id,
+          clinicianName: g.requestingClinicianName,
+          facilityName: g.requestingFacilityName,
+          scopes: g.scopes,
+          reason: g.clinicalReason,
+          createdAt: g.createdAt,
+          validUntil: new Date(g.validUntil).toISOString(),
+          isRevoked: g.isRevoked,
+          revokedAt: g.revokedAt,
+          status: g.isRevoked ? 'REVOKED' : new Date() > new Date(g.validUntil) ? 'EXPIRED' : 'ACTIVE',
+        })),
+      };
+    }
+
+    if (method === 'POST' && (m = sub.match(/^consents\/requests\/([^/]+)\/(approve|reject)$/))) {
+      if (m[2] === 'approve') {
+        const body = await readBody(req);
+        const customHours = Number(body.customHours);
+        const grant = ctx.consentManager.approveInApp(
+          m[1],
+          patient.id,
+          Number.isFinite(customHours) && customHours > 0 && customHours <= 24 * 365 ? { customHours } : undefined
+        );
+        return { grantId: grant.id };
+      }
+      ctx.consentManager.rejectRequest(m[1], patient.id);
+      return { success: true };
+    }
+
+    if (method === 'POST' && (m = sub.match(/^consents\/grants\/([^/]+)\/revoke$/))) {
+      const body = await readBody(req);
+      const grant = ctx.consentManager.revokeConsent(patient.id, m[1], text(body.reason, 200) || 'Patient revoked consent');
+      return { grantId: grant.id, status: 'REVOKED' };
+    }
+
+    if (method === 'POST' && sub === 'emergency-code/reissue') {
+      const old = ctx.codeByPatient.get(patient.id);
+      const fresh = generatePatientUniqueCode('medistry.health');
+      if (old) {
+        ctx.patientsByCode.delete(old.rawCode);
+        ctx.patientsByCode.delete(old.formattedCode);
+      }
+      ctx.patientsByCode.set(fresh.rawCode, patient);
+      ctx.patientsByCode.set(fresh.formattedCode, patient);
+      ctx.codeByPatient.set(patient.id, { rawCode: fresh.rawCode, formattedCode: fresh.formattedCode });
+      patient.activeEmergencyCodeId = fresh.rawCode;
+      const now = new Date().toISOString();
+      if (old) ctx.persistence?.saveEmergencyCode({ patientId: patient.id, ...old, isActive: false, createdAt: now, revokedAt: now, revocationReason: 'Reissued by patient' });
+      ctx.persistence?.saveEmergencyCode({ patientId: patient.id, rawCode: fresh.rawCode, formattedCode: fresh.formattedCode, isActive: true, createdAt: now });
+      ctx.persistence?.savePatient(patient);
+      ctx.auditManager.appendEntry({
+        actorId: patient.id,
+        subjectId: patient.id,
+        action: 'EMERGENCY_CODE_REVOKED_AND_REISSUED',
+        accessType: 'NORMAL_CONSENT',
+        ipAddress: '127.0.0.1',
+        userAgent: 'PatientPortal/1.0',
+        reason: 'Patient reissued emergency code. The previous code no longer works.',
+      });
+      return { emergencyCode: fresh.formattedCode };
+    }
+
+    if (method === 'GET' && sub === 'notifications') {
+      const phones = new Set(patient.emergencyContacts.map((c) => c.phone));
+      const demo = decryptPatientDemographics(patient);
+      const sms = ctx.notifications.sentSmsLogs
+        .filter((s) => phones.has(s.to))
+        .map((s) => ({ channel: 'SMS to emergency contact', to: s.to, message: s.message }));
+      const push = ctx.notifications.sentPushLogs
+        .filter((p) => p.toUserId === patient.id)
+        .map((p) => ({ channel: 'Push to you', to: `${demo.firstName} ${demo.lastName}`, message: `${p.title}: ${p.body}` }));
+      return { notifications: [...push, ...sms].reverse().slice(0, 50) };
+    }
+
+    return undefined;
+  }
+
+  async function clinicianAndAdminRoute(req: http.IncomingMessage, method: string, pathname: string, url: URL): Promise<unknown | undefined> {
+    let m: RegExpMatchArray | null;
+
+    // ---------- Patient and proxy sign-in ----------
+    if (pathname.startsWith('/api/auth/patient/')) return patientAuthRoute(req, method, pathname);
+
+    // ---------- Admins ----------
+    if (pathname.startsWith('/api/admin/')) return adminRoute(req, method, pathname, url);
+
     // ---------- Clinician sign-in ----------
     if (method === 'GET' && (m = pathname.match(/^\/api\/demo\/totp\/([^/]+)$/))) {
-      // Demo authenticator: shows the current code so visitors can sign in. Disabled in production.
-      if (IS_PRODUCTION) throw new HttpError(404, 'Not found');
-      const secret = totpSecrets.get(m[1]);
+      // Demo authenticator: shows the current code so visitors can sign in. Demo mode only, never in production,
+      // and never for an account with an enrolled authenticator.
+      if (IS_PRODUCTION || !DEMO_MODE) throw new HttpError(404, 'Not found');
+      const secret = ctx.staff.demoTotpSecret(m[1]);
       if (!secret) throw new HttpError(404, 'Clinician not found');
       const stepMs = 30_000;
       return { code: generateTotp(secret), secondsRemaining: Math.ceil((stepMs - (Date.now() % stepMs)) / 1000) };
     }
 
+    // Self-registration: status PENDING until a facility admin of the claimed facility (or a platform admin) approves.
+    if (method === 'POST' && pathname === '/api/clinician/register') {
+      limit(registerLimiter, req);
+      const body = await readBody(req, 15 * 1024 * 1024); // licence document (base64, at most 10 MB decoded)
+      const result = await ctx.staff.registerClinician(body, requestInfo(req));
+      return {
+        clinicianId: result.clinician.id, status: result.clinician.status, message: result.message, regulator: result.regulator,
+        registryMatch: result.registryMatch, totpEnrolment: result.totpEnrolment,
+        next: 'Add the QR code to your authenticator app now: it is shown only once. You can sign in, but clinical features stay disabled until a facility admin approves you.',
+      };
+    }
+
     if (method === 'POST' && pathname === '/api/clinician/login') {
       if (!loginLimiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many sign-in attempts from this network. Wait a minute and try again.');
       const body = await readBody(req);
-      const clinician = ctx.seedData.clinicians.find((c) => c.id === body.clinicianId);
-      if (!clinician) throw new HttpError(404, 'Clinician not found');
-      const state = loginFailures.get(clinician.id) || { count: 0, lockedUntil: 0 };
-      if (state.lockedUntil > Date.now()) {
-        throw new HttpError(429, `Too many failed attempts. Try again in ${Math.ceil((state.lockedUntil - Date.now()) / 60000)} minutes.`);
-      }
-      const ok = verifyTotp(String(body.totp || '').trim(), totpSecrets.get(clinician.id)!);
-      if (!ok) {
-        state.count += 1;
-        if (state.count >= MAX_LOGIN_ATTEMPTS) {
-          state.lockedUntil = Date.now() + LOCKOUT_MS;
-          state.count = 0;
-        }
-        loginFailures.set(clinician.id, state);
-        throw new HttpError(401, 'Invalid authenticator code');
-      }
-      loginFailures.delete(clinician.id);
+      const clinician = ctx.staff.findClinician(body);
+      if (!clinician) throw new HttpError(body.clinicianId ? 404 : 401, body.clinicianId ? 'Clinician not found' : 'Invalid password or authenticator code');
+      // Password (required outside demo mode, or once set) then TOTP; five failures lock the account.
+      await ctx.staff.signInClinician(clinician, body.password, body.totp, requestInfo(req));
       // Optional: a scanner device sends its public key to get a 7-day offline pass bound to that key.
       let offline: Record<string, string> = {};
-      if (body.devicePublicJwk !== undefined) {
+      if (body.devicePublicJwk !== undefined && clinician.status !== 'VERIFIED') {
+        offline = { passError: 'An offline pass needs a verified clinician account' };
+      } else if (body.devicePublicJwk !== undefined) {
         limit(deviceKeyLimiter, req);
         let thumbprint: string;
         try {
@@ -615,13 +701,15 @@ export function createPortalApi(ctx: PortalContext) {
           offline = { passError: err.message };
         }
       }
-      const token = issueToken(clinician.id);
+      const token = sessions.issue('clinician', clinician.id, SESSION_TTL_MS);
       extraHeaders.set(req, { 'Set-Cookie': sessionCookie(req, token, Math.floor(SESSION_TTL_MS / 1000)) });
       return { token, clinician: publicClinician(clinician), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000), ...offline };
     }
 
     if (method === 'POST' && pathname === '/api/clinician/logout') {
-      // Tokens are stateless and expire on their own; sign-out clears the browser's cookie and stored copy.
+      // Revokes this token and clears the browser's cookie and stored copy.
+      const claims = sessions.read(bearerOf(req)) || sessions.read(parseCookies(req.headers.cookie)[SESSION_COOKIE] || '');
+      if (claims) sessions.revokeToken(claims);
       extraHeaders.set(req, { 'Set-Cookie': sessionCookie(req, '', 0) });
       return { success: true };
     }
@@ -645,6 +733,7 @@ export function createPortalApi(ctx: PortalContext) {
     // ---------- Everything below needs a clinician session ----------
     if (method === 'POST' && pathname === '/api/emergency/break-glass') {
       const clinician = currentClinician(req);
+      requireVerified(clinician);
       const body = await readBody(req);
       const patient = lookupByCode(String(body.code || ''));
       if (!patient) throw new HttpError(404, 'Patient emergency code not found');
@@ -672,6 +761,8 @@ export function createPortalApi(ctx: PortalContext) {
     const clinician = currentClinician(req);
 
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
+    // Everything below is clinical (records, consent, emergency grants, offline passes): verified clinicians only.
+    requireVerified(clinician);
 
     if (method === 'GET' && pathname === '/api/clinician/record-flags') {
       limit(cardLimiter, req);
@@ -819,6 +910,124 @@ export function createPortalApi(ctx: PortalContext) {
       return { patient: profileOf(patient), timeline: slimTimeline(items), expiresAt: new Date(grant.expiresAt).toISOString() };
     }
 
+    return undefined;
+  }
+
+  // ---------- Patient and proxy sign-in (phone first; email for recovery) ----------
+  async function patientAuthRoute(req: http.IncomingMessage, method: string, pathname: string): Promise<unknown | undefined> {
+    if (method !== 'POST' && !(method === 'GET' && pathname === '/api/auth/patient/me')) return undefined;
+    const info = requestInfo(req);
+    const signedIn = (account: UserAccount) => ({
+      token: sessions.issue('person', account.id, SESSION_TTL_MS), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000), account: publicAccount(account),
+    });
+    let m: RegExpMatchArray | null;
+
+    if (pathname === '/api/auth/patient/otp/request') return ctx.patientAuth.requestSignInCode((await readBody(req)).phone, info);
+    if (pathname === '/api/auth/patient/otp/verify') {
+      const body = await readBody(req);
+      return signedIn(ctx.patientAuth.verifySignInCode(body.phone, body.otp, info));
+    }
+    // Recovery: code to the recovery email, then a code to the new phone; then every old session is revoked.
+    if (pathname === '/api/auth/patient/recovery/request') {
+      const body = await readBody(req);
+      return ctx.patientAuth.requestRecovery(body.email, body.newPhone, info);
+    }
+    if (pathname === '/api/auth/patient/recovery/verify-email') {
+      const body = await readBody(req);
+      return ctx.patientAuth.verifyRecoveryEmailCode(body.email, body.otp, info);
+    }
+    if (pathname === '/api/auth/patient/recovery/complete') {
+      const body = await readBody(req);
+      return signedIn(await ctx.patientAuth.completeRecovery(body.newPhone, body.otp, info));
+    }
+
+    // ---- signed in ----
+    const { account, claims } = currentPerson(req);
+    if (pathname === '/api/auth/patient/me') {
+      const records = ctx.proxies.accessibleFor(account).map((r) => {
+        const p = ctx.patientsById.get(r.patientId);
+        const demo = p ? decryptPatientDemographics(p) : null;
+        return { ...r, name: demo ? `${demo.firstName} ${demo.lastName}` : null };
+      });
+      const invitations = ctx.proxies.forProxy(account.id).filter((r) => r.status === 'INVITED')
+        .map((r) => ({ id: r.id, relationship: r.relationship, scopes: r.scopes, validUntil: r.validUntil }));
+      return { account: publicAccount(account), records, invitations };
+    }
+    if (pathname === '/api/auth/patient/logout') {
+      sessions.revokeToken(claims);
+      ctx.patientAuth.recordSignOut(account, info);
+      return { success: true };
+    }
+    if (pathname === '/api/auth/patient/sessions/revoke') {
+      ctx.patientAuth.revokeAllSessions(account, info);
+      return { success: true, signedOut: 'all devices' };
+    }
+    if (pathname === '/api/auth/patient/recovery-email') return ctx.patientAuth.requestRecoveryEmailCode(account, (await readBody(req)).email, info);
+    if (pathname === '/api/auth/patient/recovery-email/verify') {
+      const body = await readBody(req);
+      return { account: publicAccount(ctx.patientAuth.confirmRecoveryEmail(account, body.email, body.otp, info)) };
+    }
+    if ((m = pathname.match(/^\/api\/auth\/patient\/proxy-invitations\/([^/]+)\/(accept|decline)$/))) {
+      return { proxy: ctx.proxies.respond(account, decodeURIComponent(m[1]), m[2] === 'accept', info) };
+    }
+    return undefined;
+  }
+
+  // ---------- Admins (facility and platform) ----------
+  async function adminRoute(req: http.IncomingMessage, method: string, pathname: string, url: URL): Promise<unknown | undefined> {
+    const info = requestInfo(req);
+    let m: RegExpMatchArray | null;
+
+    if (method === 'POST' && pathname === '/api/admin/login') {
+      if (!loginLimiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many sign-in attempts from this network. Wait a minute and try again.');
+      const body = await readBody(req);
+      const admin = ctx.staff.findAdmin(body);
+      if (!admin) throw new HttpError(401, 'Invalid password or authenticator code');
+      await ctx.staff.signInAdmin(admin, body.password, body.totp, info);
+      return {
+        token: sessions.issue('admin', admin.id, SESSION_TTL_MS), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
+        admin: { id: admin.id, role: admin.role, name: admin.displayName, facilityId: admin.facilityId || null },
+      };
+    }
+
+    const { account: admin, claims } = adminSession(req);
+    if (method === 'GET' && pathname === '/api/admin/me') {
+      return { admin: { id: admin.id, role: admin.role, name: admin.displayName, facilityId: admin.facilityId || null } };
+    }
+    if (method === 'POST' && pathname === '/api/admin/logout') {
+      sessions.revokeToken(claims);
+      return { success: true };
+    }
+    if (method === 'GET' && pathname === '/api/admin/clinicians') {
+      return { clinicians: ctx.staff.listForReview(admin, url.searchParams.get('status') || undefined) };
+    }
+    if (method === 'GET' && (m = pathname.match(/^\/api\/admin\/clinicians\/([^/]+)\/licence-document$/))) {
+      return { document: ctx.staff.licenceDocument(admin, decodeURIComponent(m[1]), info) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/clinicians\/([^/]+)\/(approve|reject)$/))) {
+      const body = await readBody(req);
+      const c = await ctx.staff.review(admin, decodeURIComponent(m[1]), m[2] as 'approve' | 'reject', body.reason, info);
+      return { clinicianId: c.id, status: c.status };
+    }
+    if (method === 'POST' && pathname === '/api/admin/facility-admins') {
+      const { admin: created, totpEnrolment } = await ctx.staff.createFacilityAdmin(admin, await readBody(req), info);
+      return { adminId: created.id, facilityId: created.facilityId, totpEnrolment };
+    }
+
+    // Patient accounts: a facility admin of the patient's primary facility, or a platform admin, after an
+    // in-person identity check. Admins never see clinical content through these endpoints.
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/patients\/([^/]+)\/(account|guardian)$/))) {
+      const patient = getPatient(decodeURIComponent(m[1]));
+      if (admin.role !== 'PLATFORM_ADMIN' && admin.facilityId !== patient.primaryFacilityId) {
+        throw new HttpError(403, 'Only an admin of the patient\'s primary facility, or a platform admin, can do this');
+      }
+      const body = await readBody(req);
+      if (m[2] === 'account') {
+        const account = ctx.patientAuth.linkPatient(patient, body.phone, { ...info, adminId: admin.id });
+        return { account: publicAccount(account) };
+      }
+      return { proxy: await ctx.proxies.establishGuardian(patient, body, admin, info) };
+    }
     return undefined;
   }
 

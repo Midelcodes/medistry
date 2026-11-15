@@ -42,7 +42,8 @@ const persistence = await createPersistence().catch(startupFailed);
 const runtime = await createRuntime(persistence).catch(startupFailed);
 console.log(`💾 Storage: ${persistence.mode}`);
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
-  consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans } = runtime;
+  consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
+  accounts, patientAuth, staff, proxies } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -65,7 +66,20 @@ const handlePortalApi = createPortalApi({
   offlineScans,
   persistence,
   dataDir: path.join(ROOT_DIR, 'data'),
+  accounts,
+  patientAuth,
+  staff,
+  proxies,
 });
+
+// Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th
+// birthday (also enforced on every request). Runs once at start-up.
+const housekeeping = () => {
+  proxies.enforceExpiry();
+  staff.sendLicenceReminders().catch((err) => console.error(`[housekeeping] licence reminders failed: ${err?.message || err}`));
+};
+housekeeping();
+setInterval(housekeeping, 24 * 60 * 60 * 1000).unref();
 
 // Site pages: shared layout + one template per page
 type PageDef = { file: string; nav: string; title: string; description: string; script?: string; module?: boolean };
@@ -304,7 +318,13 @@ const server = http.createServer(async (req, res) => {
 
     // API: Clinicians
     if (method === 'GET' && pathname === '/api/clinicians') {
-      sendJson(res, 200, { clinicians: seedData.clinicians });
+      // Verified clinicians only, public fields only (no review notes, registration or licence-expiry details).
+      sendJson(res, 200, {
+        clinicians: seedData.clinicians.filter((c) => c.status === 'VERIFIED').map((c) => ({
+          id: c.id, userId: c.userId, fullName: c.fullName, licenseNumber: c.licenseNumber, countryCode: c.countryCode,
+          specialty: c.specialty, facilityId: c.facilityId, status: c.status,
+        })),
+      });
       return;
     }
 

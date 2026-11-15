@@ -21,6 +21,7 @@ enum UserRole {
   RECORDS_OFFICER // drafts only; a doctor signs
   FACILITY_ADMIN
   PLATFORM_ADMIN
+  PROXY           // portal user without their own linked record: acts only as a proxy (parent, caregiver...)
 }
 
 enum VerificationStatus {
@@ -115,20 +116,33 @@ enum FHIRResourceType {
 
 model User {
   id               String    @id
-  email            String?   @unique
-  phone            String?   @unique
-  passwordHash     String?   // not used yet: clinicians sign in with TOTP; patient sign-in is not implemented
+  email            String?   @unique // not used: emails are stored as emailHash + encryptedEmail
+  phone            String?   @unique // not used: phone numbers are stored as phoneHash + encryptedPhone
+  passwordHash     String?   // scrypt (N=2^15, r=8, p=1, 16-byte salt); clinicians and admins
   role             UserRole
-  twoFactorSecret  String?   // Encrypted TOTP secret (not used yet; demo secrets are derived from JWT_SECRET)
-  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?   // AES-256-GCM encrypted TOTP secret (demo seed accounts derive theirs from JWT_SECRET)
+  twoFactorEnabled Boolean   @default(false) // true after the first sign-in with the enrolled authenticator
   countryCode      String    @default("NG") // ISO 3166-1 alpha-2
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+
+  // Sign-in (Phase 12). hasAccount marks rows that hold credentials (not just a placeholder for a seeded record).
+  hasAccount        Boolean   @default(false)
+  displayName       String?   // admins only
+  phoneHash         String?   @unique // HMAC-SHA256 lookup hash (FIELD_ENCRYPTION_KEY-derived)
+  encryptedPhone    String?   // AES-256-GCM
+  emailHash         String?   @unique
+  encryptedEmail    String?
+  failedSignIns     Int       @default(0)
+  lockedUntil       DateTime?
+  sessionsNotBefore DateTime? // sessions issued earlier are refused (sign out everywhere, account recovery)
+  lastSignInAt      DateTime?
 
   patient          Patient?
   clinician        Clinician?
   facilityAdmin    FacilityAdmin?
   sessions         Session[]
+  proxyFor         ProxyRelationship[]
 }
 
 model Session {
@@ -177,10 +191,18 @@ model Clinician {
   facilityId      String             // primary facility
   facility        Facility           @relation(fields: [facilityId], references: [id])
   status          VerificationStatus @default(PENDING)
-  verifiedAt      DateTime?
-  verifiedBy      String?            // Admin ID
+  verifiedAt      DateTime?          // when an admin approved or rejected the registration
+  verifiedBy      String?            // Admin user ID (approval or rejection)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
+
+  // Self-registration (Phase 12)
+  registeredAt             DateTime?
+  registryMatch            Boolean?  // found in the registry adapter's list when submitted
+  licenceExpiresOn         String?   // YYYY-MM-DD, if given; drives the re-verification reminder
+  licenceReminderSentFor   String?   // expiry date the last reminder was sent for
+  encryptedRejectionReason String?   // AES-256-GCM
+  licenceDocument          ClinicianLicenceDocument?
 
   facilities      ClinicianFacility[]
   emergencyGrants EmergencyAccessGrant[] @relation("TreatingClinician")
@@ -266,6 +288,58 @@ model Patient {
   emergencyGrants      EmergencyAccessGrant[]
   offlineCards         OfflineCard[]
   offlineScans         OfflineScanEvent[]
+  proxies              ProxyRelationship[]
+}
+
+enum ProxyRelationshipKind {
+  parent
+  guardian
+  caregiver
+  spouse
+  other
+}
+
+enum ProxyStatus {
+  INVITED
+  ACTIVE
+  DECLINED
+  REVOKED
+  ENDED
+}
+
+// Guardian / proxy access (Phase 12). The proxy acts under their own identity; audit entries name both.
+model ProxyRelationship {
+  id                  String                @id
+  patientId           String
+  patient             Patient               @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  proxyUserId         String
+  proxyUser           User                  @relation(fields: [proxyUserId], references: [id], onDelete: Cascade)
+  relationship        ProxyRelationshipKind
+  scopes              String[]              // view | manage-card | approve-consent
+  validFrom           DateTime
+  validUntil          DateTime?             // a minor's guardian: the patient's 18th birthday
+  verifiedBy          String?               // admin who checked a guardian's authority in person
+  status              ProxyStatus
+  managesMinorAccount Boolean               @default(false)
+  createdAt           DateTime
+  endedAt             DateTime?
+  endReason           String?
+
+  @@index([patientId])
+  @@index([proxyUserId])
+}
+
+// A self-registered clinician's licence document: validated, malware-scanned and AES-256-GCM encrypted.
+model ClinicianLicenceDocument {
+  id                String    @id
+  clinicianId       String    @unique
+  clinician         Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  encryptedFilename String
+  mimeType          String
+  sha256            String
+  sizeBytes         Int
+  encryptedPayload  String
+  uploadedAt        DateTime
 }
 
 // Signed offline emergency cards (ES256).

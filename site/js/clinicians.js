@@ -188,7 +188,7 @@
   $('#cl-logout').addEventListener('click', async () => { await signOut(); renderState(); });
 
   bindClinicianLogin({
-    form: '#cl-login-form', select: '#cl-clinician', totp: '#cl-totp',
+    form: '#cl-login-form', select: '#cl-clinician', totp: '#cl-totp', password: '#cl-password',
     error: '#cl-login-error', showCode: '#cl-show-code', onSignedIn: renderState,
   });
   renderState();
