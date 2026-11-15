@@ -308,6 +308,7 @@
     const { records } = await api('/api/auth/patient/me', { auth: false, token: patientToken });
     $('#patient-signin').hidden = true;
     $('#ps-signout').hidden = false;
+    $('#ussd-pin-panel').hidden = !records.some((r) => r.as === 'self'); // only for your own record
     const picker = $('#patient-picker');
     picker.innerHTML = records.map((r) => `<option value="${esc(r.patientId)}">${esc(r.name || r.patientId)}${r.as === 'self' ? '' : ` (as ${esc(r.as)})`}</option>`).join('');
     if (!records.length) { showToast('No records yet', 'Ask your clinic to link your phone number to your record, or accept a proxy invitation.'); return; }
@@ -341,6 +342,17 @@
       } catch (ex) { setError(err, ex.message); }
     });
   }
+
+  $('#ussd-pin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('#ussd-pin-error');
+    setError(err, '');
+    try {
+      await api('/api/auth/patient/ussd-pin', { method: 'POST', auth: false, token: patientToken, body: { pin: $('#ussd-pin').value.trim() } });
+      $('#ussd-pin').value = '';
+      showToast('USSD PIN saved', 'You can now use Medistry by USSD from this phone number.');
+    } catch (ex) { setError(err, ex.message); }
+  });
 
   $('#ps-signout').addEventListener('click', async () => {
     try { await api('/api/auth/patient/logout', { method: 'POST', auth: false, token: patientToken, body: {} }); } catch { /* already gone */ }

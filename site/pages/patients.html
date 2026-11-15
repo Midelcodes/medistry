@@ -28,6 +28,19 @@
           <p class="form-error" id="ps-error" role="alert" hidden></p>
         </div>
 
+        <div id="ussd-pin-panel" class="panel narrow-panel" hidden>
+          <h2 class="panel-title">USSD PIN for feature phones</h2>
+          <p class="panel-sub">Set a 4-digit PIN to see your emergency summary, recent access, dispute access or lock your card by USSD from this phone number. Three wrong PINs lock USSD until you set a new PIN here.</p>
+          <form id="ussd-pin-form" class="stack-form">
+            <div class="form-group">
+              <label for="ussd-pin">New USSD PIN (4 digits)</label>
+              <input id="ussd-pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required>
+            </div>
+            <button type="submit" class="btn btn-pill-primary"><span>Save PIN</span></button>
+          </form>
+          <p class="form-error" id="ussd-pin-error" role="alert" hidden></p>
+        </div>
+
         <div class="demo-banner" id="demo-banner">
           <strong>Demo environment.</strong> There is no patient sign-in here. Pick one of the synthetic patients to explore their portal.
         </div>

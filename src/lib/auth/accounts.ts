@@ -30,6 +30,10 @@ export interface UserAccount {
   sessionsNotBefore?: string; // tokens issued earlier are refused
   lastSignInAt?: string;
   createdAt: string;
+  // USSD (Phase 13): 4-digit PIN set in the app, scrypt hash; locked after 3 wrong PINs until reset in the app.
+  ussdPinHash?: string;
+  ussdPinFailures?: number;
+  ussdLocked?: boolean;
 }
 
 export interface AccountRepo { saveUserAccount(a: UserAccount): void }

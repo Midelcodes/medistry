@@ -86,6 +86,10 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
 | Password guessing (clinicians, admins) | scrypt N=2^15; five failures lock the account; TOTP required as well | Lockout can be used to lock a clinician out on purpose (denial of service) |
 | Fake clinician registration | Licence format check, encrypted licence document, PENDING until an admin of the claimed facility approves; PENDING has no clinical permissions | Format checks do not prove a licence is real; admins must check the register |
 | Proxy overreach | Scopes per route; proxies act under their own identity and every audit entry names them; no scope edits clinical content | A proxy with `approve-consent` can share the record; patients choose scopes |
+| SMS reveals health information (shared phones, lock screens, operator logs) | Every SMS comes from a template with no clinical fields; the break-glass reason stays out of SMS and email | The SMS still says that a doctor at a named facility opened the record |
+| Forged delivery reports | Shared secret in the callback URL or header, compared in constant time; rate limited; a report can only change a delivery status | The secret is in a URL, so it can appear in provider or proxy logs; rotate it if exposed |
+| USSD caller-ID spoofing or a stolen phone | Callback needs a shared secret (provider to server); caller number must match a patient phone AND a 4-digit PIN (scrypt); 3 wrong PINs lock USSD until reset in the app | A 4-digit PIN is weak against someone who has the phone and watched it being typed; the PIN travels in each USSD callback over the operator network |
+| USSD lockout used against a patient | Locking needs the patient's own number to be presented by the provider | Someone holding the phone can lock USSD on purpose; the app still works |
 | Guardian keeps control of an adult | Ends automatically on the 18th birthday (checked on every request and daily) | The age of majority is a product setting (18), not checked per jurisdiction |
 
 ## 3. Offline Emergency Card (Signed QR), Clinician Passes and Offline Scans

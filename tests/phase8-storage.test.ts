@@ -21,6 +21,7 @@ function recordingPersistence() {
     grant: new Map<string, any>(), dispute: new Map<string, any>(), card: new Map<string, any>(), scan: new Map<string, any>(),
     deviceKey: new Map<string, any>(), flag: new Map<string, any>(), notification: [] as any[],
     user: new Map<string, any>(), proxy: new Map<string, any>(), document: new Map<string, any>(),
+    delivery: new Map<string, any>(),
   };
   let refusedAudit = 0;
   const p: Persistence & { tables: typeof t; refusedAudit: () => number } = {
@@ -44,6 +45,7 @@ function recordingPersistence() {
     saveUserAccount: (a) => { const { user, facilityAdmin } = M.userAccountToRows(a); t.user.set(a.id, { ...user, facilityAdmin }); },
     saveProxyRelationship: (r) => t.proxy.set(r.id, M.proxyToRow(r)),
     saveCredentialDocument: (d) => t.document.set(d.id, M.credentialDocumentToRow(d)),
+    saveNotificationDelivery: (d) => t.delivery.set(d.id, M.deliveryToRow(d)),
     appendAudit: (e) => {
       // Same continuity rule as the Prisma repository's locked append.
       const last = t.audit.at(-1);
@@ -63,6 +65,7 @@ function recordingPersistence() {
         notifications: t.notification.map(M.rowToNotification),
         userAccounts: [...t.user.values()].map(M.rowToUserAccount), proxyRelationships: [...t.proxy.values()].map(M.rowToProxy),
         credentialDocuments: [...t.document.values()].map(M.rowToCredentialDocument),
+        notificationDeliveries: [...t.delivery.values()].map(M.rowToDelivery),
       };
     },
     flush: async () => {}, close: async () => {},
@@ -163,6 +166,7 @@ describe('Write-through and restart (recording repository, same rows as Postgres
     same(b.consoleProvider.sentSmsLogs, a.consoleProvider.sentSmsLogs, 'SMS log');
     same(b.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), a.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), 'user accounts');
     same(b.proxies.forPatient(did.patient.id), a.proxies.forPatient(did.patient.id), 'proxy relationships');
+    same(b.deliveries.all(), a.deliveries.all(), 'SMS delivery records');
     same(b.seedData.clinicians.find((c) => c.id === did.registered.clinician.id), did.registered.clinician, 'registered clinician');
     assert.strictEqual(b.staff.listForReview(b.accounts.get('admin-platform-demo')!, 'PENDING')[0].hasLicenceDocument, true, 'licence document');
     for (const id of a.patientsById.keys()) {

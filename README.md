@@ -84,6 +84,26 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
   admin records a minor's parent or guardian, who manages the account until the patient's 18th birthday (from the
   encrypted date of birth); control then passes to the patient and both are notified.
 
+## SMS and USSD (feature phones)
+
+- **SMS.** `SMS_PROVIDER=africastalking` sends SMS through Africa's Talking (`AT_USERNAME`, `AT_API_KEY`,
+  `AT_SENDER_ID`, `AT_ENV=sandbox|production`); the console provider stays the default. Network errors, HTTP
+  429/5xx and gateway errors are retried 3 times with exponential backoff (1 s, 2 s); after that the dispatcher
+  falls back to email and push. Each SMS gets a delivery record (`NotificationDelivery`): the phone number only
+  as a keyed hash plus its last 3 digits, the template id, status, provider message id, attempts, last error.
+- **No clinical detail in SMS.** Every SMS is rendered from a template (`SMS_TEMPLATES` in
+  `src/lib/i18n/translations.ts`, in en, sw, ha, yo, ig and fr). A break-glass alert reads, in full: "Your Medistry
+  record was accessed by Dr X at Facility Y. Open the app or dial *CODE# to review or dispute." Patients get it on
+  their own sign-in phone (fallback: their recovery email), and their emergency contacts get a short notice.
+  The non-English texts are drafts awaiting native-speaker review.
+- **Delivery reports.** Register `POST /api/webhooks/sms/delivery/<SMS_WEBHOOK_SECRET>` as the delivery-report
+  callback (the secret can also go in an `X-Medistry-Webhook-Secret` header). Constant-time check, rate limited.
+- **USSD.** Register `POST /api/ussd/<USSD_CALLBACK_SECRET>` as the USSD callback. The caller's number must be a
+  patient's sign-in phone, plus a 4-digit USSD PIN the patient sets in the portal (scrypt; three wrong PINs lock
+  USSD until a new PIN is set). Menu: 1 emergency summary (blood group, genotype, allergies), 2 last 3 accesses,
+  3 dispute the last access, 4 lock (revoke) the emergency card. Every action is audited; every screen is at most
+  182 characters. TODO: the short code (`USSD_SERVICE_CODE`) must be provisioned with the provider and the telcos.
+
 ## Offline emergency card
 
 A credit-card-sized card whose QR code a clinician can verify with no internet. Synthetic data only.

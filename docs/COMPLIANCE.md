@@ -120,3 +120,8 @@ These are open. None of them has been done.
 - [ ] Decide how a facility verifies a guardian's authority and a patient's identity before linking a phone number
       (the endpoints record who did it; the checks themselves are a facility process).
 - [ ] Choose a production SMS provider and review the content of sign-in and notification messages.
+- [ ] Provision the USSD short code with the provider and each telco, and confirm any sender-ID registration
+      the SMS provider or regulators require in each country (not researched; the code only reads `AT_SENDER_ID`).
+- [ ] Native-speaker review of the Swahili, Hausa, Yoruba, Igbo and French SMS templates.
+- [ ] Confirm the Africa's Talking recipient status codes and delivery-report fields against the current
+      documentation (the request format follows the official SDK source; see `src/lib/notifications/africasTalking.ts`).

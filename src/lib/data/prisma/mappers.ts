@@ -22,6 +22,7 @@ import type { DeviceKeyEntity, EmergencyCodeEntity, NotificationEntity } from '.
 import type { UserAccount } from '../../auth/accounts.ts';
 import type { ProxyRelationship } from '../../auth/proxies.ts';
 import type { CredentialDocument } from '../../clinical/fileUpload.ts';
+import type { NotificationDelivery } from '../../notifications/deliveries.ts';
 
 type Row = Record<string, any>;
 
@@ -73,6 +74,7 @@ export const userAccountToRows = (a: UserAccount) => ({
     passwordHash: a.passwordHash ?? null, twoFactorSecret: a.encryptedTotpSecret ?? null, twoFactorEnabled: a.totpEnabled,
     failedSignIns: a.failedSignIns, lockedUntil: date(a.lockedUntil), sessionsNotBefore: date(a.sessionsNotBefore),
     lastSignInAt: date(a.lastSignInAt), createdAt: new Date(a.createdAt),
+    ussdPinHash: a.ussdPinHash ?? null, ussdPinFailures: a.ussdPinFailures ?? 0, ussdLocked: !!a.ussdLocked,
   },
   facilityAdmin: a.role === 'FACILITY_ADMIN' && a.facilityId ? { userId: a.id, facilityId: a.facilityId } : null,
 });
@@ -82,7 +84,20 @@ export const rowToUserAccount = (r: Row): UserAccount => clean({
   passwordHash: r.passwordHash ?? undefined, encryptedTotpSecret: r.twoFactorSecret ?? undefined, totpEnabled: !!r.twoFactorEnabled,
   failedSignIns: r.failedSignIns ?? 0, lockedUntil: iso(r.lockedUntil), sessionsNotBefore: iso(r.sessionsNotBefore),
   lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
+  ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined,
 } as UserAccount);
+
+// ---------- SMS delivery record (Phase 13): phone as hash + last 3 digits only, no message text ----------
+export const deliveryToRow = (d: NotificationDelivery): Row => ({
+  id: d.id, channel: d.channel, provider: d.provider, toHash: d.toHash, toLast3: d.toLast3, templateId: d.templateId, status: d.status,
+  providerStatus: d.providerStatus ?? null, providerMessageId: d.providerMessageId ?? null, attempts: d.attempts,
+  lastError: d.lastError ?? null, createdAt: new Date(d.createdAt), updatedAt: new Date(d.updatedAt),
+});
+export const rowToDelivery = (r: Row): NotificationDelivery => clean({
+  id: r.id, channel: r.channel, provider: r.provider, toHash: r.toHash, toLast3: r.toLast3, templateId: r.templateId, status: r.status,
+  providerStatus: r.providerStatus ?? undefined, providerMessageId: r.providerMessageId ?? undefined, attempts: r.attempts,
+  lastError: r.lastError ?? undefined, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+} as NotificationDelivery);
 
 // ---------- Proxy relationship ----------
 export const proxyToRow = (x: ProxyRelationship): Row => ({

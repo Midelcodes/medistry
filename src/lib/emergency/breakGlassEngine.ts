@@ -83,6 +83,8 @@ export class EmergencyBreakGlassEngine {
   private dispatcher: NotificationDispatcher;
   /** Write-through repository (no-op in memory storage). */
   persistence?: Pick<EmergencyGrantRepo, 'saveEmergencyGrant'>;
+  /** The patient's own sign-in phone and recovery email (from their account), so the patient is alerted too. */
+  contactLookup?: (patientId: string) => { phone?: string; email?: string } | undefined;
 
   /** Rebuilds grants from storage (start-up). */
   hydrate(grants: StoredEmergencyGrant[]): void {
@@ -216,6 +218,8 @@ export class EmergencyBreakGlassEngine {
       {
         id: patient.id,
         fullName: `${demographics.firstName} ${demographics.lastName}`,
+        ...(this.contactLookup?.(patient.id) || {}),
+        locale: patient.preferredLocale,
         emergencyContacts: patient.emergencyContacts,
       },
       {

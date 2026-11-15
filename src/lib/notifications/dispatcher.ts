@@ -4,6 +4,8 @@
  * with automatic graceful degradation if SMS providers encounter outages.
  */
 import type { NotificationRepo, NotificationEntity } from '../data/repositories.ts';
+import type { NotificationDeliveryStore } from './deliveries.ts';
+import { renderSms, type SmsTemplateId } from '../i18n/translations.ts';
 
 export interface NotificationMessage {
   toPhone?: string;
@@ -13,8 +15,14 @@ export interface NotificationMessage {
   body: string;
 }
 
-/** storedAs: what the message log keeps instead of the text (for one-time codes, which must never be stored). */
-export interface SendOptions { storedAs?: string }
+/**
+ * storedAs: what the message log keeps instead of the text (for one-time codes, which must never be stored).
+ * templateId: which SMS template produced the text (kept on the delivery record instead of the text).
+ */
+export interface SendOptions { storedAs?: string; templateId?: string }
+
+/** An SMS is always a template plus values (see SMS_TEMPLATES in i18n/translations.ts), never free text. */
+export interface SmsContent { template: SmsTemplateId; locale?: string; vars?: Record<string, string | number> }
 
 export interface INotificationProvider {
   sendSms(toPhone: string, message: string, opts?: SendOptions): Promise<boolean>;
@@ -32,6 +40,8 @@ export class ConsoleNotificationProvider implements INotificationProvider {
   public forceSmsFailure = false; // For testing graceful degradation
   /** Write-through repository (no-op in memory storage). */
   persistence?: NotificationRepo;
+  /** Delivery records (one per SMS). */
+  deliveries?: NotificationDeliveryStore;
 
   /** Restores sent-message logs from storage (start-up), in order. */
   hydrate(entries: NotificationEntity[]): void {
@@ -45,9 +55,12 @@ export class ConsoleNotificationProvider implements INotificationProvider {
   // The in-memory logs stand in for the recipient's handset or inbox (tests read codes from them); the
   // stored log keeps opts.storedAs instead of the text when one is given.
   async sendSms(toPhone: string, message: string, opts: SendOptions = {}): Promise<boolean> {
+    const delivery = this.deliveries?.create(toPhone, opts.templateId || 'unspecified', 'console');
     if (this.forceSmsFailure) {
+      if (delivery) this.deliveries!.update(delivery, { attempts: 1, status: 'FAILED', lastError: 'simulated outage' });
       throw new Error('Telecom gateway timeout (MTN/Airtel SMS outage simulated)');
     }
+    if (delivery) this.deliveries!.update(delivery, { attempts: 1, status: 'SENT' });
     this.sentSmsLogs.push({ to: toPhone, message });
     this.persistence?.saveNotification({ channel: 'SMS', to: toPhone, body: opts.storedAs ?? message });
     return true;
@@ -90,29 +103,32 @@ export class NotificationDispatcher {
       fullName: string;
       phone?: string;
       email?: string;
+      locale?: string;
       emergencyContacts: Array<{ name: string; phone: string; email?: string; relationship: string }>;
     },
     eventDetails: {
       doctorName: string;
       facilityName: string;
-      reason: string;
+      reason: string; // kept off SMS and email: it is clinical detail
       timestamp: string;
     }
   ): Promise<DispatchedAlertResult[]> {
     const results: DispatchedAlertResult[] = [];
-    const alertBody = `🚨 MEDISTRY EMERGENCY BREAK-GLASS ALERT: Dr. ${eventDetails.doctorName} at ${eventDetails.facilityName} has accessed your emergency medical record. Reason: ${eventDetails.reason}. If this was not authorized by you or hospital staff, visit your patient portal immediately to dispute.`;
+    // No clinical detail in SMS or email: who opened the record, where, and how to review or dispute.
+    const vars = { doctor: eventDetails.doctorName, facility: eventDetails.facilityName, patient: patient.fullName };
+    const alertBody = renderSms('access_alert', patient.locale, vars);
 
     // 1. Notify Patient
     if (patient.phone) {
       try {
-        await this.provider.sendSms(patient.phone, alertBody);
+        await this.provider.sendSms(patient.phone, alertBody, { templateId: 'access_alert' });
         results.push({ recipient: patient.phone, channel: 'SMS', status: 'DELIVERED' });
       } catch (err: any) {
-        // SMS Outage fallback to Email and Push
+        // SMS failed (after the provider's retries): fall back to email and push
         results.push({ recipient: patient.phone, channel: 'SMS', status: 'FAILED', error: err.message });
         if (patient.email) {
           try {
-            await this.provider.sendEmail(patient.email, '🚨 URGENT: Emergency Medical Access to Your Record', alertBody);
+            await this.provider.sendEmail(patient.email, 'Medistry: your record was accessed', alertBody);
             results.push({ recipient: patient.email, channel: 'EMAIL', status: 'FALLBACK_DELIVERED' });
           } catch {}
         }
@@ -125,15 +141,15 @@ export class NotificationDispatcher {
 
     // 2. Notify Emergency Contacts
     for (const contact of patient.emergencyContacts) {
-      const contactMsg = `🚨 MEDISTRY EMERGENCY NOTIFICATION: An emergency break-glass access was triggered for ${patient.fullName} by Dr. ${eventDetails.doctorName} at ${eventDetails.facilityName}. Reason: ${eventDetails.reason}.`;
+      const contactMsg = renderSms('contact_alert', patient.locale, vars);
       try {
-        await this.provider.sendSms(contact.phone, contactMsg);
+        await this.provider.sendSms(contact.phone, contactMsg, { templateId: 'contact_alert' });
         results.push({ recipient: `${contact.name} (${contact.phone})`, channel: 'SMS', status: 'DELIVERED' });
       } catch (err: any) {
         results.push({ recipient: contact.phone, channel: 'SMS', status: 'FAILED', error: err.message });
         if (contact.email) {
           try {
-            await this.provider.sendEmail(contact.email, `🚨 Emergency Alert for ${patient.fullName}`, contactMsg);
+            await this.provider.sendEmail(contact.email, 'Medistry: emergency access notice', contactMsg);
             results.push({ recipient: contact.email, channel: 'EMAIL', status: 'FALLBACK_DELIVERED' });
           } catch {}
         }
@@ -143,10 +159,15 @@ export class NotificationDispatcher {
     return results;
   }
 
-  /** One SMS (sign-in codes, account notices). Failures are reported, never thrown. */
-  async sendSms(toPhone: string, message: string, opts?: SendOptions): Promise<DispatchedAlertResult> {
+  /**
+   * One SMS from a template (sign-in codes, account notices). A `code` value is never stored: the message log
+   * keeps the text with the code blanked. Failures are reported, never thrown.
+   */
+  async sendSms(toPhone: string, sms: SmsContent): Promise<DispatchedAlertResult> {
+    const message = renderSms(sms.template, sms.locale, sms.vars);
+    const storedAs = sms.vars?.code !== undefined ? renderSms(sms.template, sms.locale, { ...sms.vars, code: '[code not stored]' }) : undefined;
     try {
-      await this.provider.sendSms(toPhone, message, opts);
+      await this.provider.sendSms(toPhone, message, { templateId: sms.template, storedAs });
       return { recipient: toPhone, channel: 'SMS', status: 'DELIVERED' };
     } catch (err: any) {
       return { recipient: toPhone, channel: 'SMS', status: 'FAILED', error: err?.message };

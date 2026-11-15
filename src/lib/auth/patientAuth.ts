@@ -126,11 +126,13 @@ export class PatientAuthService {
     });
   }
 
-  private async sms(phone: string, message: string, storedAs: string): Promise<void> {
-    const sent = await this.deps.dispatcher.sendSms(phone, message, { storedAs });
+  /** A code by SMS, from a template. The dispatcher never stores the code. */
+  private async smsCode(phone: string, template: 'sign_in_code' | 'new_phone_code', otp: string): Promise<void> {
+    const sent = await this.deps.dispatcher.sendSms(phone, { template, vars: { code: otp } });
     if (sent.status === 'FAILED') throw new AuthError(503, 'The code could not be sent. Try again in a few minutes.');
   }
 
+  /** Email text for a code (email is not limited to SMS templates). */
   private codeText(otp: string, what: string): string {
     return `Your Medistry ${what} code is ${otp}. It expires in ${OTP_TTL_MS / 60_000} minutes. Never share it, not even with Medistry staff.`;
   }
@@ -147,7 +149,7 @@ export class PatientAuthService {
     const destinationHash = identifierHash('phone', phone);
     this.limit(destinationHash, info);
     const { otp } = this.createChallenge('sign-in', destinationHash);
-    await this.sms(phone, this.codeText(otp, 'sign-in'), 'Medistry sign-in code (code not stored)');
+    await this.smsCode(phone, 'sign_in_code', otp);
     return { sent: true, expiresInSeconds: OTP_TTL_MS / 1000 };
   }
 
@@ -218,7 +220,7 @@ export class PatientAuthService {
     const challenge = this.consume('recovery', identifierHash('email', email), otp, info);
     const newPhone = decryptField(challenge.encryptedPending!);
     const { otp: phoneOtp } = this.createChallenge('recovery-new-phone', identifierHash('phone', newPhone), { accountId: challenge.accountId });
-    await this.sms(newPhone, this.codeText(phoneOtp, 'new phone confirmation'), 'Recovery phone confirmation code (code not stored)');
+    await this.smsCode(newPhone, 'new_phone_code', phoneOtp);
     return { next: 'verify-new-phone', phone: maskPhone(newPhone) };
   }
 
@@ -239,7 +241,7 @@ export class PatientAuthService {
     this.audit('ACCOUNT_RECOVERED', account, info, 'Account recovered: recovery email code and new phone number confirmed');
     this.audit('SESSIONS_REVOKED', account, info, 'All sessions revoked after account recovery');
     if (oldPhone && oldPhone !== newPhone) {
-      await this.deps.dispatcher.sendSms(oldPhone, 'Your Medistry account was moved to a new phone number. If this was not you, contact your clinic now.');
+      await this.deps.dispatcher.sendSms(oldPhone, { template: 'account_moved' });
     }
     return account;
   }

@@ -330,7 +330,7 @@ export class StaffService {
     const message = decision === 'approve'
       ? 'Your Medistry clinician account is verified. You can now sign in and use clinical features.'
       : 'Your Medistry clinician registration was not approved. Contact your facility admin for details.';
-    if (phone) await this.deps.dispatcher.sendSms(phone, message);
+    if (phone) await this.deps.dispatcher.sendSms(phone, { template: decision === 'approve' ? 'clinician_approved' : 'clinician_rejected' });
     await this.deps.dispatcher.notifyUser(clinician.userId, 'Clinician registration', message);
     return clinician;
   }
@@ -352,7 +352,7 @@ export class StaffService {
       const account = this.deps.accounts.get(c.userId);
       const phone = account ? this.deps.accounts.phoneOf(account) : undefined;
       const email = account ? this.deps.accounts.emailOf(account) : undefined;
-      if (phone) await this.deps.dispatcher.sendSms(phone, message);
+      if (phone) await this.deps.dispatcher.sendSms(phone, { template: daysLeft > 0 ? 'licence_expiring' : 'licence_expired', vars: { date: c.licenceExpiresOn } });
       if (email) await this.deps.dispatcher.sendEmail(email, 'Medistry licence re-verification', message);
       await this.deps.dispatcher.notifyUser(c.userId, 'Licence re-verification', message);
       c.licenceReminderSentFor = c.licenceExpiresOn;

@@ -137,7 +137,7 @@ export class ProxyService {
     this.save(r);
     this.audit('PROXY_INVITED', by.id, patient.id, info, `Proxy ${invitee.id} invited as ${relationship} with scopes ${scopes.join(', ')}`);
     const phone = this.deps.accounts.phoneOf(invitee);
-    if (phone) await this.deps.dispatcher.sendSms(phone, `A Medistry patient invited you to help with their health record as their ${relationship}. Sign in to Medistry with this phone number to accept or decline.`);
+    if (phone) await this.deps.dispatcher.sendSms(phone, { template: 'proxy_invite', locale: patient.preferredLocale });
     return r;
   }
 
@@ -182,7 +182,7 @@ export class ProxyService {
     this.save(r);
     this.audit('GUARDIAN_ESTABLISHED', admin.id, patient.id, info, `Guardian ${guardian.id} (${r.relationship}) verified by ${admin.role}; manages the account until the patient turns ${AGE_OF_MAJORITY}`);
     const phone = this.deps.accounts.phoneOf(guardian);
-    if (phone) await this.deps.dispatcher.sendSms(phone, `You are now the guardian on a child's Medistry health record. Sign in to Medistry with this phone number to manage it.`);
+    if (phone) await this.deps.dispatcher.sendSms(phone, { template: 'guardian_added', locale: patient.preferredLocale });
     return r;
   }
 
@@ -207,11 +207,12 @@ export class ProxyService {
         this.audit('GUARDIAN_CONTROL_ENDED', 'system', r.patientId, system, `Patient turned ${AGE_OF_MAJORITY}: guardian ${r.proxyUserId} no longer manages the account; control passed to the patient`);
         const guardian = this.deps.accounts.get(r.proxyUserId);
         const guardianPhone = guardian ? this.deps.accounts.phoneOf(guardian) : undefined;
-        if (guardianPhone) void this.deps.dispatcher.sendSms(guardianPhone, `The person whose Medistry record you managed has turned ${AGE_OF_MAJORITY}. They now control their own record; your guardian access has ended.`);
+        const locale = this.deps.patientsById.get(r.patientId)?.preferredLocale;
+        if (guardianPhone) void this.deps.dispatcher.sendSms(guardianPhone, { template: 'guardian_ended', locale, vars: { age: AGE_OF_MAJORITY } });
         const own = this.deps.accounts.byPatient(r.patientId);
         const ownPhone = own ? this.deps.accounts.phoneOf(own) : undefined;
         const note = `You have turned ${AGE_OF_MAJORITY}: you now control your own Medistry record. Your guardian's access has ended. You can invite them back as a proxy if you wish.`;
-        if (ownPhone) void this.deps.dispatcher.sendSms(ownPhone, note);
+        if (ownPhone) void this.deps.dispatcher.sendSms(ownPhone, { template: 'majority_patient', locale, vars: { age: AGE_OF_MAJORITY } });
         void this.deps.dispatcher.notifyUser(r.patientId, 'You now control your record', note);
       } else {
         this.end(r, 'ENDED', 'Validity period ended', now);

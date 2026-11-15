@@ -26,6 +26,7 @@ export function createMemoryPersistence(): Persistence {
     saveUserAccount: noop,
     saveProxyRelationship: noop,
     saveCredentialDocument: noop,
+    saveNotificationDelivery: noop,
     loadSnapshot: async () => null,
     flush: async () => {},
     close: async () => {},

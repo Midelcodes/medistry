@@ -9,7 +9,10 @@ import { generateSeedData, type SeedDatabasePayload } from '../../prisma/seed.ts
 import { AuditChainManager } from './audit/hashChain.ts';
 import { ClinicalDataStore } from './clinical/store.ts';
 import { ClinicalTimelineEngine } from './clinical/timeline.ts';
-import { NotificationDispatcher, ConsoleNotificationProvider } from './notifications/dispatcher.ts';
+import { NotificationDispatcher, ConsoleNotificationProvider, type INotificationProvider } from './notifications/dispatcher.ts';
+import { NotificationDeliveryStore } from './notifications/deliveries.ts';
+import { AfricasTalkingNotificationProvider, africasTalkingConfig } from './notifications/africasTalking.ts';
+import { UssdService } from './ussd/ussdService.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
@@ -36,6 +39,8 @@ export interface Runtime {
   timelineEngine: ClinicalTimelineEngine;
   consoleProvider: ConsoleNotificationProvider;
   dispatcher: NotificationDispatcher;
+  deliveries: NotificationDeliveryStore;
+  ussd: UssdService;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -51,12 +56,27 @@ export interface Runtime {
 
 const scanUrlFor = (formattedCode: string) => `https://medistry.health/e/${formattedCode}`;
 
+/**
+ * SMS_PROVIDER=africastalking sends SMS through Africa's Talking (AT_USERNAME, AT_API_KEY, AT_SENDER_ID, AT_ENV);
+ * email and push still go to the console provider. Anything else: the console provider (default).
+ */
+function smsProvider(consoleProvider: ConsoleNotificationProvider, deliveries: NotificationDeliveryStore): INotificationProvider {
+  const choice = (process.env.SMS_PROVIDER || 'console').trim().toLowerCase();
+  if (choice === 'africastalking') {
+    return new AfricasTalkingNotificationProvider({ config: africasTalkingConfig(), deliveries, fallback: consoleProvider });
+  }
+  if (choice !== 'console') console.warn(`[notifications] SMS_PROVIDER=${choice.replace(/[^a-z_-]/g, '').slice(0, 20)} is not supported; using the console provider.`);
+  return consoleProvider;
+}
+
 function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['audit'] = []) {
   const auditManager = new AuditChainManager(auditEntries);
   const clinicalStore = new ClinicalDataStore(auditManager);
   const timelineEngine = new ClinicalTimelineEngine(clinicalStore);
   const consoleProvider = new ConsoleNotificationProvider();
-  const dispatcher = new NotificationDispatcher(consoleProvider);
+  const deliveries = new NotificationDeliveryStore();
+  consoleProvider.deliveries = deliveries;
+  const dispatcher = new NotificationDispatcher(smsProvider(consoleProvider, deliveries));
   const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
   const offlineCardStore = new OfflineCardStore(auditManager);
   const consentManager = new ConsentLifecycleManager(auditManager);
@@ -99,10 +119,16 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
       }
     },
   });
+  // Patients get the break-glass SMS on their own sign-in phone (fallback: their recovery email), not only their contacts.
+  emergencyEngine.contactLookup = (patientId) => {
+    const account = accounts.byPatient(patientId);
+    return account ? { phone: accounts.phoneOf(account), email: accounts.emailOf(account) } : undefined;
+  };
+  const ussd = new UssdService({ accounts, patientsById, auditManager, accessLogManager, offlineCards: offlineCardStore });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
-    dispatcher, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-    accounts, patientAuth, staff, proxies,
+    dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
+    accounts, patientAuth, staff, proxies, ussd,
   };
 }
 
@@ -117,6 +143,7 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.offlineScans.persistence = persistence;
   rt.recordFlags.persistence = persistence;
   rt.consoleProvider.persistence = persistence;
+  rt.deliveries.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins();
   rt.staff.bootstrapPlatformAdmin();
@@ -183,6 +210,7 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.offlineScans.hydrate(snapshot.scanEvents, snapshot.deviceKeys);
   rt.recordFlags.hydrate(snapshot.recordFlags);
   rt.consoleProvider.hydrate(snapshot.notifications);
+  rt.deliveries.hydrate(snapshot.notificationDeliveries || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

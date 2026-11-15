@@ -43,7 +43,7 @@ const runtime = await createRuntime(persistence).catch(startupFailed);
 console.log(`💾 Storage: ${persistence.mode}`);
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-  accounts, patientAuth, staff, proxies } = runtime;
+  accounts, patientAuth, staff, proxies, deliveries, ussd } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -70,6 +70,8 @@ const handlePortalApi = createPortalApi({
   patientAuth,
   staff,
   proxies,
+  deliveries,
+  ussd,
 });
 
 // Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th

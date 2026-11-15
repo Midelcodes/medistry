@@ -27,6 +27,8 @@ import type { PatientAuthService, RequestInfo } from '../auth/patientAuth.ts';
 import type { StaffService } from '../auth/staff.ts';
 import type { ProxyService, ProxyScope } from '../auth/proxies.ts';
 import { currentActing, runActing, type ProxyActing } from '../audit/actingContext.ts';
+import type { NotificationDeliveryStore } from '../notifications/deliveries.ts';
+import type { UssdService } from '../ussd/ussdService.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -61,6 +63,9 @@ export interface PortalContext {
   patientAuth: PatientAuthService;
   staff: StaffService;
   proxies: ProxyService;
+  // SMS delivery records and USSD (Phase 13)
+  deliveries: NotificationDeliveryStore;
+  ussd: UssdService;
 }
 
 class HttpError extends Error {
@@ -88,6 +93,9 @@ export function createPortalApi(ctx: PortalContext) {
     if (!limiter.check(clientIp(req)).allowed) throw new HttpError(429, 'Too many requests. Wait a minute and try again.');
   };
   const registerLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 60_000, maxRequests: 5 }); // clinician self-registration
+  // Provider callbacks (per calling IP: the provider's servers).
+  const webhookLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 120 }); // SMS delivery reports
+  const ussdLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });    // USSD callbacks
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
   // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
@@ -129,6 +137,56 @@ export function createPortalApi(ctx: PortalContext) {
   }
 
   const text = (v: unknown, max: number) => sanitizeClinicalText(typeof v === 'string' ? v : '').slice(0, max);
+
+  /** A provider callback body: application/x-www-form-urlencoded (Africa's Talking) or JSON. */
+  async function readCallback(req: http.IncomingMessage): Promise<Record<string, string>> {
+    const type = String(req.headers['content-type'] || '');
+    if (type.includes('application/json')) return readBody(req, 16 * 1024);
+    const raw: string = await new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 16 * 1024) { reject(new HttpError(413, 'Payload too large')); req.destroy(); }
+      });
+      req.on('end', () => resolve(body));
+      req.on('error', reject);
+    });
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
+
+  /**
+   * Shared-secret check for provider callbacks: the secret comes in the URL path (Africa's Talking callback URLs
+   * cannot carry custom headers) or the X-Medistry-Webhook-Secret header. Compared in constant time (SHA-256 of
+   * both sides, so lengths do not leak). A missing or short configured secret never matches.
+   */
+  function secretMatches(given: string | undefined, configured: string | undefined): boolean {
+    if (!configured || configured.length < 32 || !given) return false;
+    const a = crypto.createHash('sha256').update(given).digest();
+    const b = crypto.createHash('sha256').update(configured).digest();
+    return crypto.timingSafeEqual(a, b);
+  }
+  const callbackSecret = (req: http.IncomingMessage, fromPath?: string) =>
+    fromPath ? decodeURIComponent(fromPath) : String(req.headers['x-medistry-webhook-secret'] || '') || undefined;
+
+  /**
+   * USSD callback (Africa's Talking format). Replies are text/plain "CON ..."/"END ...". USSD_CALLBACK_SECRET is
+   * required when set; without it the endpoint only works in demo mode.
+   */
+  async function handleUssd(req: http.IncomingMessage, res: http.ServerResponse, secretInPath?: string): Promise<void> {
+    const reply = (status: number, body: string) => {
+      res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...getSecurityHttpHeaders() });
+      res.end(body);
+    };
+    if (!ussdLimiter.check(clientIp(req)).allowed) return reply(429, 'END Too many requests. Try again in a minute.');
+    const configured = process.env.USSD_CALLBACK_SECRET;
+    if (configured ? !secretMatches(callbackSecret(req, secretInPath), configured) : !DEMO_MODE) return reply(configured ? 401 : 404, 'END Not available.');
+    try {
+      const body = await readCallback(req);
+      reply(200, await ctx.ussd.handle(body, { ipAddress: clientIp(req), userAgent: 'USSD' }));
+    } catch {
+      reply(200, 'END Sorry, something went wrong. Please try again later.');
+    }
+  }
 
   function getPatient(id: string): PatientEntity {
     const patient = ctx.patientsById.get(id);
@@ -333,6 +391,12 @@ export function createPortalApi(ctx: PortalContext) {
     const pathname = url.pathname;
     if (!pathname.startsWith('/api/')) return false;
 
+    const ussd = method === 'POST' ? pathname.match(/^\/api\/ussd(?:\/([^/]+))?$/) : null;
+    if (ussd) {
+      await handleUssd(req, res, ussd[1]);
+      return true;
+    }
+
     try {
       const result = await route(req, method, pathname, url);
       if (result === undefined) return false;
@@ -395,6 +459,18 @@ export function createPortalApi(ctx: PortalContext) {
         }
       }
       return { success: true, reference: entry.id.slice(0, 8).toUpperCase() };
+    }
+
+    // SMS delivery reports (provider callback). Needs SMS_WEBHOOK_SECRET (32+ characters) in the path or header.
+    if (method === 'POST' && (m = pathname.match(/^\/api\/webhooks\/sms\/delivery(?:\/([^/]+))?$/))) {
+      limit(webhookLimiter, req);
+      const configured = process.env.SMS_WEBHOOK_SECRET;
+      if (!configured) throw new HttpError(404, 'Not found');
+      if (!secretMatches(callbackSecret(req, m[1]), configured)) throw new HttpError(401, 'Unauthorized');
+      const report = await readCallback(req);
+      const delivery = ctx.deliveries.applyDeliveryReport(report);
+      // 200 even for an unknown message id, so the provider does not keep retrying.
+      return { received: true, matched: !!delivery };
     }
 
     // Emergency gate (what an anonymous scanner sees)
@@ -961,6 +1037,11 @@ export function createPortalApi(ctx: PortalContext) {
     if (pathname === '/api/auth/patient/sessions/revoke') {
       ctx.patientAuth.revokeAllSessions(account, info);
       return { success: true, signedOut: 'all devices' };
+    }
+    // USSD PIN (feature phones): 4 digits, scrypt; setting a new PIN also lifts a USSD lockout.
+    if (pathname === '/api/auth/patient/ussd-pin') {
+      await ctx.ussd.setPin(account, (await readBody(req)).pin, info);
+      return { success: true };
     }
     if (pathname === '/api/auth/patient/recovery-email') return ctx.patientAuth.requestRecoveryEmailCode(account, (await readBody(req)).email, info);
     if (pathname === '/api/auth/patient/recovery-email/verify') {
