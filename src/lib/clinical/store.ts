@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { encryptField, decryptField } from '../patient/profile.ts';
 import { evaluatePolicy, type ActorContext, type ConsentContext, type EmergencyGrantContext } from '../policy/enforcer.ts';
 import { AuditChainManager } from '../audit/hashChain.ts';
+import { deploymentCountry } from '../security/config.ts';
 import type {
   FHIREncounter,
   FHIRCondition,
@@ -187,7 +188,7 @@ export class ClinicalDataStore {
       signedAt: isDraft ? undefined : now,
       authorClinicianId: actor.clinicianId || actor.userId,
       originFacilityId: context.facilityId,
-      countryCode: context.countryCode || 'NG',
+      countryCode: context.countryCode || deploymentCountry(),
       clinicalCategory: context.category,
       effectiveDate: (resource as any).effectiveDateTime || (resource as any).recordedDate || now,
       encryptedPayload,
@@ -208,7 +209,7 @@ export class ClinicalDataStore {
       resourceType: resource.resourceType,
       resourceId: recordId,
       facilityId: context.facilityId,
-      countryCode: context.countryCode || 'NG',
+      countryCode: context.countryCode || deploymentCountry(),
       ipAddress: '127.0.0.1',
       userAgent: 'ClinicalClient/1.0',
       reason: isDraft ? 'Draft created; not visible until a doctor signs it' : 'Authoring initial clinical encounter resource',

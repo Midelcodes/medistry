@@ -32,7 +32,8 @@ import { seedClinicalRecords } from './lib/site/seedClinical.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
 import { scannerStrings } from './lib/i18n/translations.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
-import { appBaseUrl, clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
+import { appBaseUrl, clientIp as getClientIp, DEMO_MODE, deploymentCountry } from './lib/security/config.ts';
+import { registryFor } from './lib/clinician/verification.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -331,8 +332,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         status: 'HEALTHY',
         platform: 'MEDISTRY Regional Health Record Portability Platform',
-        countryCode: 'NG',
-        regulator: 'Medical and Dental Council of Nigeria (MDCN)',
+        countryCode: deploymentCountry(),
+        regulator: (() => { try { return registryFor(deploymentCountry()).regulatorName; } catch { return 'Not configured for this country'; } })(),
         compliance: 'Nigeria Data Protection Act (NDPA 2023)',
         timestamp: new Date().toISOString(),
         activePatients: seedData.patients.length,
@@ -445,7 +446,7 @@ const server = http.createServer(async (req, res) => {
 
       // Same card as the patient portal: the current valid card, or the first one if none exists.
       try {
-        const card = await handlePortalApi.offlineCardFor(patient, req, false);
+        const card = await handlePortalApi.offlineCardFor(patient, req, false, urlObj.searchParams.get('lang'));
         sendHtml(res, 200, card.cardHtml);
       } catch (err: any) {
         sendHtml(res, err?.status || 500, `<h1>${escapeHtml(err?.message || 'Card unavailable')}</h1><p><a href="/patients">Open the patient portal</a> to reissue your card.</p>`);

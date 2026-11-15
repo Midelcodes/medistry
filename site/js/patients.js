@@ -157,6 +157,7 @@
       ? patient.activeMedications.map((m) => box('card-med', m.id, sel.medicationIds.includes(m.id), `${m.medicationName} (${m.dose})`)).join('')
       : '<p class="empty-note">No medicines on your record.</p>';
     $('#card-opt-dx').checked = !!sel.includeRecentDiagnosis;
+    $('#card-lang').value = patient.preferredLocale === 'sw' ? 'sw' : 'en';
     $('#card-dirty').hidden = true;
   }
 
@@ -206,6 +207,13 @@
 
   $('#my-card').addEventListener('change', (e) => {
     if (e.target.matches('input[name="card-cond"], input[name="card-med"], #card-opt-dx')) saveCardChoices();
+  });
+
+  $('#card-lang').addEventListener('change', async (e) => {
+    try {
+      await api(`${base()}/settings`, { method: 'PATCH', auth: false, body: { preferredLocale: e.target.value } });
+      await loadCard(false); // same card and QR, printed text in the new language
+    } catch (err) { fail(err); }
   });
 
   $('#card-print').addEventListener('click', () => {

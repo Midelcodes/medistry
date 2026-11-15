@@ -23,7 +23,8 @@ import { generatePatientUniqueCode, normalizePatientCode } from '../code/crockfo
 import { generateTotp, generateTotpSecret, verifyTotp } from '../auth/security.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
-import { buildOfflineCardBundle } from '../emergency/offlineCard.ts';
+import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
+import { SUPPORTED_LOCALES } from '../i18n/translations.ts';
 import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import type { OfflineScanService } from '../emergency/offlineScans.ts';
@@ -210,6 +211,7 @@ export function createPortalApi(ctx: PortalContext) {
         version: p.cardVersion,
         stale: p.cardStale,
       },
+      preferredLocale: p.preferredLocale || 'en',
     };
   }
 
@@ -225,7 +227,7 @@ export function createPortalApi(ctx: PortalContext) {
    * The patient's offline card with QR and printable HTML. reissue=false returns the current card if it
    * is still valid (issuing the first one if needed); reissue=true always issues a new version.
    */
-  async function offlineCardFor(p: PatientEntity, req: http.IncomingMessage, reissue: boolean) {
+  async function offlineCardFor(p: PatientEntity, req: http.IncomingMessage, reissue: boolean, lang?: string | null) {
     const opts = { recentDiagnosis: p.cardIncludeRecentDiagnosis ? latestDiagnosis(p) : null };
     let issued: Awaited<ReturnType<typeof ctx.offlineCards.issue>> & { reused: boolean };
     const current = reissue ? null : ctx.offlineCards.getCurrentIssued(p);
@@ -240,8 +242,9 @@ export function createPortalApi(ctx: PortalContext) {
         ? 'Your emergency card was revoked. Reissue it to print a new card.'
         : 'Your emergency card has expired. Reissue it to print a new card.');
     }
-    const bundle = await buildOfflineCardBundle(issued, { baseUrl: appBaseUrl(req), formattedCode: ctx.codeByPatient.get(p.id)?.formattedCode });
-    return { ...bundle, reused: issued.reused, stale: p.cardStale };
+    const locale = cardLocale(lang || p.preferredLocale);
+    const bundle = await buildOfflineCardBundle(issued, { baseUrl: appBaseUrl(req), formattedCode: ctx.codeByPatient.get(p.id)?.formattedCode, locale });
+    return { ...bundle, reused: issued.reused, stale: p.cardStale, locale };
   }
 
   function parseFilters(url: URL): TimelineFilterOptions {
@@ -362,7 +365,7 @@ export function createPortalApi(ctx: PortalContext) {
       if (method === 'PATCH' && sub === 'settings') {
         // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
         const body = await readBody(req);
-        const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis'];
+        const allowed = ['publicEmergencyOptIn', 'cardConditions', 'cardMedicationIds', 'cardIncludeRecentDiagnosis', 'preferredLocale'];
         const keys = Object.keys(body || {});
         const extra = keys.filter((k) => !allowed.includes(k));
         if (extra.length) throw new HttpError(400, `Only visibility settings can be changed here. Not allowed: ${extra.join(', ')}`);
@@ -370,9 +373,14 @@ export function createPortalApi(ctx: PortalContext) {
         if (body.publicEmergencyOptIn !== undefined && typeof body.publicEmergencyOptIn !== 'boolean') {
           throw new HttpError(400, 'publicEmergencyOptIn must be true or false');
         }
+        if (body.preferredLocale !== undefined && !SUPPORTED_LOCALES.includes(body.preferredLocale)) {
+          throw new HttpError(400, `preferredLocale must be one of ${SUPPORTED_LOCALES.join(', ')}`);
+        }
+        if (body.preferredLocale !== undefined) patient.preferredLocale = body.preferredLocale;
+        const { preferredLocale: _ignored, ...cardBody } = body;
         let card: ReturnType<typeof validateCardSelection>;
         try {
-          card = validateCardSelection(patient, body);
+          card = validateCardSelection(patient, cardBody);
         } catch (err: any) {
           throw new HttpError(400, err.message);
         }
@@ -414,7 +422,7 @@ export function createPortalApi(ctx: PortalContext) {
 
       // GET: current card (issues the first one if none is valid). POST: reissue, superseding the old card.
       if ((method === 'GET' || method === 'POST') && sub === 'offline-card') {
-        return offlineCardFor(patient, req, method === 'POST');
+        return offlineCardFor(patient, req, method === 'POST', url.searchParams.get('lang'));
       }
 
       if (method === 'GET' && sub === 'offline-cards') {

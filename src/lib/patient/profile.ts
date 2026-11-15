@@ -4,7 +4,7 @@
  */
 
 import crypto from 'node:crypto';
-import { appSecret } from '../security/config.ts';
+import { appSecret, deploymentCountry } from '../security/config.ts';
 
 // Key comes from FIELD_ENCRYPTION_KEY (64 hex chars). If unset or a published default, a random per-process key is used.
 function getEncryptionKey(): Buffer {
@@ -133,6 +133,7 @@ export interface PatientEntity {
   cardIncludeRecentDiagnosis: boolean;
   cardVersion: number;               // version of the latest issued card (0 = none issued)
   cardStale: boolean;                // a signed record changed card content since the card was issued
+  preferredLocale?: string;          // language for the printed card and notifications (i18n locale); English if unset
 
   activeEmergencyCodeId?: string;
   createdAt: string;
@@ -182,7 +183,7 @@ export function createPatientRecord(
   return {
     id: meta.id || crypto.randomUUID(),
     userId: meta.userId,
-    countryCode: meta.countryCode || 'NG',
+    countryCode: meta.countryCode || deploymentCountry(),
     primaryFacilityId: meta.primaryFacilityId,
 
     // Encrypt demographics

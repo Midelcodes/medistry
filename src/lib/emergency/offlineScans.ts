@@ -21,6 +21,7 @@ import type { PatientEntity } from '../patient/profile.ts';
 import type { SeedClinician, SeedFacility } from '../../../prisma/seed.ts';
 import type { OfflineCardStore } from './offlineCardStore.ts';
 import { eventSigningInput, SCAN_REASONS, MAX_BATCH } from '../../../site/js/lib/offlineScan.js';
+import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
 
 export const PASS_TYPE = 'clinician-pass';
 export const PASS_VALIDITY_SECONDS = 7 * 24 * 3600;
@@ -38,6 +39,8 @@ export interface OfflineScanEventRecord {
   cardKid: string;
   clinicianId: string;
   facilityId: string;
+  clinicianCountry: string; // where the scanning clinician is licensed (from the signed pass)
+  cardCountry: string;      // the card's country (the patient's record); scans may cross borders
   reason: ScanReason;
   details?: string;
   scannedAt: string;
@@ -66,12 +69,6 @@ export interface OfflineScanDeps {
 
 interface DeviceKeyRecord { clinicianId: string; thumbprint: string; publicJwk: JsonWebKey; boundAt: string }
 
-const REASON_TEXT: Record<ScanReason, string> = {
-  UNCONSCIOUS: 'patient unconscious',
-  LIFE_THREATENING: 'life-threatening emergency',
-  PATIENT_UNABLE_TO_CONSENT: 'patient unable to consent',
-  OTHER: 'other',
-};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const B64URL = /^[A-Za-z0-9_-]+$/;
@@ -130,7 +127,7 @@ export class OfflineScanService {
       name: c.fullName,
       fac: c.facilityId,
       lic: c.licenseNumber,
-      country: this.deps.facilities.find((f) => f.id === c.facilityId)?.countryCode || 'NG',
+      country: c.countryCode || this.deps.facilities.find((f) => f.id === c.facilityId)?.countryCode || 'NG',
       iat: nowSeconds,
       exp,
       dk: deviceThumbprint,
@@ -210,6 +207,10 @@ export class OfflineScanService {
     const facility = this.deps.facilities.find((f) => f.id === (p.fac || clinician.facilityId));
     const facilityName = facility?.name || p.fac || clinician.facilityId;
     const reasonSummary = e.reason === 'OTHER' ? `OTHER: ${e.details.trim()}` : e.reason;
+    // Emergencies cross borders: a clinician licensed elsewhere may scan; both countries are recorded.
+    const clinicianCountry = typeof p.country === 'string' && /^[A-Z]{2}$/.test(p.country) ? p.country : clinician.countryCode || 'NG';
+    const cardCountry = patient.countryCode || 'NG';
+    const crossBorder = clinicianCountry !== cardCountry ? ` (cross-border: clinician ${clinicianCountry}, card ${cardCountry})` : '';
     const scannedIso = new Date(scannedMs).toISOString();
     const audit = this.deps.auditManager.appendEntry({
       actorId: clinician.userId,
@@ -221,7 +222,8 @@ export class OfflineScanService {
       facilityId: facility?.id || clinician.facilityId,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
-      reason: `Offline card v${e.cardVersion} scanned by ${clinician.fullName} at ${facilityName} on ${scannedIso}: ${reasonSummary}; device ${p.dk.slice(0, 12)}`,
+      countryCode: cardCountry,
+      reason: `Offline card v${e.cardVersion} scanned by ${clinician.fullName} at ${facilityName} on ${scannedIso}: ${reasonSummary}; device ${p.dk.slice(0, 12)}${crossBorder}`,
     });
 
     this.events.set(eventId, {
@@ -231,6 +233,8 @@ export class OfflineScanService {
       cardKid: e.cardKid,
       clinicianId: clinician.id,
       facilityId: facility?.id || clinician.facilityId,
+      clinicianCountry,
+      cardCountry,
       reason: e.reason,
       details: typeof e.details === 'string' && e.details.trim() ? e.details.trim() : undefined,
       scannedAt: scannedIso,
@@ -241,11 +245,12 @@ export class OfflineScanService {
       deviceSig: e.deviceSig,
     });
 
+    const locale: SupportedLocale = SUPPORTED_LOCALES.includes(patient.preferredLocale as SupportedLocale) ? patient.preferredLocale as SupportedLocale : 'en';
     const when = new Date(scannedMs).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
     // Fire and forget: a notification outage must not lose the audit record that was already written.
-    this.deps.dispatcher.notifyPatientOfOfflineScan(patient.id,
-      `Your emergency card was scanned by ${clinician.fullName} at ${facilityName} on ${when} UTC for reason: ${REASON_TEXT[e.reason as ScanReason]}. Dispute it in the patient portal if this was not you.`
-    ).catch(() => { /* delivery failures are visible in the provider logs */ });
+    this.deps.dispatcher.notifyUser(patient.id, t('notify_scan_title', locale), t('notify_card_scanned', locale, {
+      name: clinician.fullName, facility: facilityName, when, reason: t(`notify_reason_${e.reason}`, locale),
+    })).catch(() => { /* delivery failures are visible in the provider logs */ });
 
     return { eventId, status: 'accepted', cardStatus: this.cardStatus(patient.id, e.cardVersion) };
   }

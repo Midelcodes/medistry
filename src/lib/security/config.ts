@@ -8,6 +8,16 @@ import crypto from 'node:crypto';
 import type http from 'node:http';
 
 export const DEMO_MODE = process.env.DEMO_MODE !== '0';
+
+/**
+ * Country this deployment serves (ISO 3166-1 alpha-2). New patients and records default to it.
+ * Read on each call so tests and tools can set it. Default NG (earlier behaviour).
+ */
+export function deploymentCountry(env: NodeJS.ProcessEnv = process.env): string {
+  const v = (env.DEPLOYMENT_COUNTRY || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(v) ? v : 'NG';
+}
+
 export const SESSION_COOKIE = 'medistry_session';
 export const SESSION_TTL_MS = Math.max(1, parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15) * 60_000;
 

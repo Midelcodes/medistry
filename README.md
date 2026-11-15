@@ -114,8 +114,10 @@ npm install
 npm run seed
 ```
 The seed script populates the database with:
-- **3 Accredited Facilities**: Lagos University Teaching Hospital (LUTH), National Hospital Abuja, Aminu Kano Teaching Hospital.
-- **6 synthetic clinicians (licence-checked in the demo)**: Surgeons, hematologists, emergency medicine specialists, and intensivists.
+- **3 Nigerian facilities**: Lagos University Teaching Hospital (LUTH), National Hospital Abuja, Aminu Kano Teaching Hospital.
+- **2 synthetic Kenyan facilities** in Nairobi (not real; `DEMO-KMFL-` registry codes are not real Kenya Master Facility List codes).
+- **6 synthetic Nigerian clinicians (licence-checked in the demo)**: Surgeons, hematologists, emergency medicine specialists, and intensivists.
+- **3 synthetic Kenyan clinicians** with `DEMO-KE-` licences, verified through a manual demo list. The KMPDC licence format and online register are not confirmed yet.
 - **10 Synthetic Patients**: Including **Amara Okonkwo** (Genotype SS Sickle Cell Anemia, severe penicillin anaphylaxis, hydroxyurea regimen).
 
 ### 5. Run the Automated Test Suite
@@ -141,7 +143,7 @@ medical/
 ├── package.json                    # Scripts and dependencies
 ├── prisma/
 │   ├── schema.prisma               # Multi-tenant schema with hash-chained audit model
-│   └── seed.ts                     # 3 facilities, 6 clinicians, 10 synthetic patients
+│   └── seed.ts                     # 3 NG + 2 synthetic KE facilities, 6 NG + 3 synthetic KE clinicians, 10 synthetic patients
 ├── src/
 │   ├── lib/
 │   │   ├── auth/                   # Scrypt KDF, RFC 6238 TOTP engine, session tokens

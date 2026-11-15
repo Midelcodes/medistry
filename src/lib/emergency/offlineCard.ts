@@ -12,6 +12,7 @@ import { generateOfflineSignedPayload, verifyOfflineSignedPayload, generateQrSvg
 import { getKid, getPublicJwks } from '../crypto/cardKeys.ts';
 import { escapeHtml } from '../security/rateLimiter.ts';
 import { appBaseUrl } from '../security/config.ts';
+import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
 import type { CompactCardPayload } from './cardPayload.ts';
 import type { IssuedOfflineCard } from './offlineCardStore.ts';
 
@@ -68,7 +69,12 @@ const ENUM_TO_SHORT: Record<string, string> = {
 };
 
 /** Shown next to anything the patient stated that no clinician has verified. */
-export const PATIENT_REPORTED_LABEL = 'Patient-reported, not clinician-verified';
+export const PATIENT_REPORTED_LABEL = t('card_patient_reported', 'en');
+
+/** A supported locale, or English. */
+export function cardLocale(value: unknown): SupportedLocale {
+  return SUPPORTED_LOCALES.includes(value as SupportedLocale) ? (value as SupportedLocale) : 'en';
+}
 
 let logoSvg: string | null = null;
 function logo(): string {
@@ -101,23 +107,24 @@ const day = (iso: string) => escapeHtml(String(iso).slice(0, 10));
  * Renders the printable card as a standalone HTML document: front and back, each 85.6mm x 54mm,
  * printed as two pages with no margins. Every interpolated value is HTML-escaped.
  */
-export function renderPrintableOfflineCard(card: PrintableCardInput): string {
+export function renderPrintableOfflineCard(card: PrintableCardInput, locale: SupportedLocale = 'en'): string {
+  const L = (key: string, params?: Record<string, string | number>) => escapeHtml(t(key, locale, params));
   const bg = escapeHtml(card.bloodGroup || 'unknown');
   const bgWords = BLOOD_GROUP_WORDS[card.bloodGroup] || '';
   const allergies = card.allergies.length
-    ? `<ul>${card.allergies.map((a) => `<li><strong>${escapeHtml(a.substance)}</strong>${a.reaction ? `: ${escapeHtml(a.reaction)}` : ''}${a.patientReported ? ` <em class="pr">(${PATIENT_REPORTED_LABEL})</em>` : ''}</li>`).join('')}</ul>`
-    : '<p>No severe allergies recorded</p>';
+    ? `<ul>${card.allergies.map((a) => `<li><strong>${escapeHtml(a.substance)}</strong>${a.reaction ? `: ${escapeHtml(a.reaction)}` : ''}${a.patientReported ? ` <em class="pr">(${L('card_patient_reported')})</em>` : ''}</li>`).join('')}</ul>`
+    : `<p>${L('card_no_allergies')}</p>`;
   const contact = card.contact
     ? `${escapeHtml(card.contact.name)} &middot; <span class="nowrap">${escapeHtml(card.contact.phone)}</span>`
-    : 'None recorded';
-  const version = card.cardVersion ? ` &middot; Card v${escapeHtml(String(card.cardVersion))}` : '';
+    : L('card_none');
+  const version = card.cardVersion ? ` &middot; ${L('card_version', { v: card.cardVersion })}` : '';
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${escapeHtml(locale)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
-<title>Medistry emergency medical card</title>
+<title>${L('card_doc_title')}</title>
 <style>
   @page { size: 85.6mm 54mm; margin: 0; }
   * { box-sizing: border-box; }
@@ -156,26 +163,26 @@ export function renderPrintableOfflineCard(card: PrintableCardInput): string {
 </head>
 <body>
 <header class="toolbar">
-  <button type="button" class="print-btn" onclick="window.print()" aria-label="Print emergency card, front and back">Print card</button>
+  <button type="button" class="print-btn" onclick="window.print()" aria-label="${L('card_print_aria')}">${L('card_print')}</button>
 </header>
 <main>
-  <section class="card front" aria-label="Card front">
+  <section class="card front" aria-label="${L('card_front_aria')}">
     <div class="left">
       <div class="brand">${logo()}<span>Medistry</span></div>
-      <h1 class="title">EMERGENCY MEDICAL CARD</h1>
-      <p class="instruct">Clinicians: scan with Medistry. Works offline.</p>
+      <h1 class="title">${L('card_title')}</h1>
+      <p class="instruct">${L('card_instruct')}</p>
     </div>
     <div class="qr">${card.qrSvg}</div>
   </section>
-  <section class="card back" aria-label="Card back">
+  <section class="card back" aria-label="${L('card_back_aria')}">
     <div class="row">
-      <div><div class="label">Blood group</div><div class="big">${bg}</div><div class="label">${escapeHtml(bgWords)}</div></div>
-      <div><div class="label">Genotype</div><div class="big">${escapeHtml(card.genotype || 'unknown')}</div></div>
-      <div><div class="label">DNR</div><div class="big dnr">${card.dnr ? 'DNR ON FILE' : 'No DNR'}</div></div>
+      <div><div class="label">${L('card_blood_group')}</div><div class="big">${bg}</div><div class="label">${escapeHtml(bgWords)}</div></div>
+      <div><div class="label">${L('card_genotype')}</div><div class="big">${escapeHtml(card.genotype || 'unknown')}</div></div>
+      <div><div class="label">${L('card_dnr_label')}</div><div class="big dnr">${card.dnr ? L('card_dnr_on') : L('card_dnr_off')}</div></div>
     </div>
-    <div class="alert" role="alert"><div class="label">Severe allergies</div>${allergies}</div>
-    <div><span class="label">Emergency contact</span><br>${contact}</div>
-    <div class="foot">Code ${escapeHtml(card.maskedCode)} &middot; Issued ${day(card.issuedAt)}${version} &middot; Expires ${day(card.expiresAt)}</div>
+    <div class="alert" role="alert"><div class="label">${L('card_allergies')}</div>${allergies}</div>
+    <div><span class="label">${L('card_contact')}</span><br>${contact}</div>
+    <div class="foot">${L('card_code')} ${escapeHtml(card.maskedCode)} &middot; ${L('card_issued')} ${day(card.issuedAt)}${version} &middot; ${L('card_expires')} ${day(card.expiresAt)}</div>
   </section>
 </main>
 </body>
@@ -185,7 +192,7 @@ export function renderPrintableOfflineCard(card: PrintableCardInput): string {
 /** Card HTML and QR for a compact (schema v1) card token. */
 export async function buildOfflineCardBundle(
   issued: Pick<IssuedOfflineCard, 'token' | 'payload' | 'warnings'> & { card: { version: number; issuedAt: string; expiresAt: string } },
-  opts: { baseUrl: string; formattedCode?: string | null }
+  opts: { baseUrl: string; formattedCode?: string | null; locale?: SupportedLocale }
 ): Promise<OfflineCardBundle> {
   const qr = await generateCardQr(issued.token, opts.baseUrl);
   const e = issued.payload.e;
@@ -200,7 +207,7 @@ export async function buildOfflineCardBundle(
     issuedAt: issued.card.issuedAt,
     expiresAt: issued.card.expiresAt,
     cardVersion: issued.card.version,
-  });
+  }, opts.locale || 'en');
   return {
     token: issued.token,
     qrPngDataUrl: qr.pngDataUrl,

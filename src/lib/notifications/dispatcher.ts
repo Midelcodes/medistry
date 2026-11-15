@@ -123,14 +123,6 @@ export class NotificationDispatcher {
     return results;
   }
 
-  /**
-   * Tells the patient that their offline emergency card was scanned (push to the patient's app).
-   * The message names who, where, when and why, so the patient can dispute it.
-   */
-  async notifyPatientOfOfflineScan(patientId: string, message: string): Promise<DispatchedAlertResult> {
-    return this.notifyUser(patientId, 'Emergency card scanned', message);
-  }
-
   /** Push notification to one user (patient or clinician). Failures are reported, never thrown. */
   async notifyUser(userId: string, title: string, message: string): Promise<DispatchedAlertResult> {
     try {

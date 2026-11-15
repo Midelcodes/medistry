@@ -206,17 +206,19 @@ describe('5. Synthetic Database Seed Verification', () => {
   test('Seed dataset satisfies all architectural multi-facility requirements', () => {
     const seed = generateSeedData();
 
-    // 1. Exactly 3 Facilities
-    assert.strictEqual(seed.facilities.length, 3);
-    const facilityIds = seed.facilities.map(f => f.id);
+    // 1. Exactly 3 Nigerian Facilities (Phase 8 adds synthetic Kenyan facilities alongside them)
+    const ngFacilities = seed.facilities.filter(f => f.countryCode === 'NG');
+    assert.strictEqual(ngFacilities.length, 3);
+    const facilityIds = ngFacilities.map(f => f.id);
     assert.ok(facilityIds.includes('fac-luth-001'));
     assert.ok(facilityIds.includes('fac-abuja-001'));
     assert.ok(facilityIds.includes('fac-kano-001'));
 
-    // 2. Exactly 6 Clinicians
-    assert.strictEqual(seed.clinicians.length, 6);
-    assert.ok(seed.clinicians.every(c => c.status === 'VERIFIED'));
-    assert.ok(seed.clinicians.every(c => c.licenseNumber.startsWith('MDCN/')));
+    // 2. Exactly 6 Nigerian (MDCN) Clinicians (Phase 8 adds synthetic Kenyan clinicians alongside them)
+    const ngClinicians = seed.clinicians.filter(c => c.countryCode === 'NG');
+    assert.strictEqual(ngClinicians.length, 6);
+    assert.ok(ngClinicians.every(c => c.status === 'VERIFIED'));
+    assert.ok(ngClinicians.every(c => c.licenseNumber.startsWith('MDCN/')));
 
     // 3. Exactly 10 Synthetic Patients
     assert.strictEqual(seed.patients.length, 10);

@@ -15,8 +15,9 @@ import type { PatientEntity, PatientAllergy, ActiveMedication } from '../patient
 import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
 import type { FinalRecordEvent, RecordSource } from '../clinical/store.ts';
+import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
 
-export const RECORD_CHANGED_MESSAGE = 'Your record changed. Review and reissue your emergency card.';
+export const RECORD_CHANGED_MESSAGE = t('notify_record_changed', 'en');
 
 export interface CardSyncResult {
   changed: boolean;
@@ -168,10 +169,11 @@ export class CardContentSync {
 
     let notified = false;
     if (hasCard || removedOptIns.length) {
+      const locale: SupportedLocale = SUPPORTED_LOCALES.includes(patient.preferredLocale as SupportedLocale) ? patient.preferredLocale as SupportedLocale : 'en';
       const removed = removedOptIns.length
-        ? ` We removed ${removedOptIns.join(', ')} from your card choices because ${removedOptIns.length === 1 ? 'it was' : 'they were'} discontinued or resolved.`
+        ? t(removedOptIns.length === 1 ? 'notify_optins_removed_one' : 'notify_optins_removed_many', locale, { items: removedOptIns.join(', ') })
         : '';
-      this.dispatcher.notifyUser(patient.id, 'Emergency card needs review', `${RECORD_CHANGED_MESSAGE}${removed}`).catch(() => {});
+      this.dispatcher.notifyUser(patient.id, t('notify_review_title', locale), `${t('notify_record_changed', locale)}${removed}`).catch(() => {});
       notified = true;
     }
     return { changed, markedStale, removedOptIns, notified };

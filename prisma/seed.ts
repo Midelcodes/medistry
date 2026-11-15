@@ -29,6 +29,10 @@ export interface SeedFacility {
   countryCode: string;
   type: string;
   address: string;
+  // Kenya Master Facility List (KMFL) code or Nigeria Health Facility Registry (HFR) code.
+  // Real codes are not used in this demo: Nigerian ones are unknown (null); Kenyan ones are marked DEMO-.
+  registryCode: string | null;
+  synthetic?: boolean;
 }
 
 export interface SeedClinician {
@@ -36,6 +40,7 @@ export interface SeedClinician {
   userId: string;
   fullName: string;
   licenseNumber: string;
+  countryCode: string; // licensing country (see src/lib/clinician/verification.ts)
   specialty: string;
   facilityId: string;
   status: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
@@ -51,7 +56,7 @@ export interface SeedDatabasePayload {
 }
 
 export function generateSeedData(): SeedDatabasePayload {
-  // 1. Three Accredited Nigerian Facilities
+  // 1. Three Nigerian facilities, then two synthetic Kenyan facilities
   const facilities: SeedFacility[] = [
     {
       id: 'fac-luth-001',
@@ -60,6 +65,7 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'Tertiary Academic Medical Center',
       address: 'Idi-Araba, Surulere, Lagos, Nigeria',
+      registryCode: null,
     },
     {
       id: 'fac-abuja-001',
@@ -68,6 +74,7 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'National Referral Hospital',
       address: 'Plot 132 Central District, Abuja, Nigeria',
+      registryCode: null,
     },
     {
       id: 'fac-kano-001',
@@ -76,10 +83,32 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'Tertiary Teaching Hospital',
       address: 'Zaria Road, Kano, Nigeria',
+      registryCode: null,
+    },
+    // Two SYNTHETIC Kenyan facilities for the KMPDC demo. Not real facilities; DEMO- registry codes are not KMFL codes.
+    {
+      id: 'fac-ke-demo-001',
+      name: 'Synthetic Demo Hospital Nairobi (not a real facility)',
+      region: 'Nairobi',
+      countryCode: 'KE',
+      type: 'Synthetic demo hospital',
+      address: 'Nairobi, Kenya (synthetic)',
+      registryCode: 'DEMO-KMFL-0001',
+      synthetic: true,
+    },
+    {
+      id: 'fac-ke-demo-002',
+      name: 'Synthetic Demo Clinic Nairobi (not a real facility)',
+      region: 'Nairobi',
+      countryCode: 'KE',
+      type: 'Synthetic demo clinic',
+      address: 'Nairobi, Kenya (synthetic)',
+      registryCode: 'DEMO-KMFL-0002',
+      synthetic: true,
     },
   ];
 
-  // 2. Six Verified MDCN Clinicians
+  // 2. Six synthetic Nigerian (MDCN) clinicians, then three synthetic Kenyan (KMPDC demo) clinicians
   const clinicians: SeedClinician[] = [
     {
       id: 'clinician-doc-1',
@@ -135,7 +164,35 @@ export function generateSeedData(): SeedDatabasePayload {
       facilityId: 'fac-kano-001',
       status: 'VERIFIED',
     },
-  ];
+    // Three SYNTHETIC Kenyan clinicians (manual KMPDC demo list). 'DEMO-' licences are not real KMPDC numbers.
+    {
+      id: 'clinician-ke-demo-1',
+      userId: 'user-ke-demo-1',
+      fullName: 'Dr. Synthetic Wanjiku (demo)',
+      licenseNumber: 'DEMO-KE-1001',
+      specialty: 'Emergency Medicine',
+      facilityId: 'fac-ke-demo-001',
+      status: 'VERIFIED',
+    },
+    {
+      id: 'clinician-ke-demo-2',
+      userId: 'user-ke-demo-2',
+      fullName: 'Dr. Synthetic Otieno (demo)',
+      licenseNumber: 'DEMO-KE-1002',
+      specialty: 'Internal Medicine',
+      facilityId: 'fac-ke-demo-001',
+      status: 'VERIFIED',
+    },
+    {
+      id: 'clinician-ke-demo-3',
+      userId: 'user-ke-demo-3',
+      fullName: 'Dr. Synthetic Mwangi (demo)',
+      licenseNumber: 'DEMO-KE-1003',
+      specialty: 'Paediatrics',
+      facilityId: 'fac-ke-demo-002',
+      status: 'VERIFIED',
+    },
+  ].map((c) => ({ ...c, countryCode: c.licenseNumber.startsWith('MDCN/') ? 'NG' : 'KE' }));
 
   // 3. Ten Rich Multi-Facility Synthetic Patients
   const rawPatients = [
@@ -420,7 +477,7 @@ export function generateSeedData(): SeedDatabasePayload {
 if (process.argv[1]?.endsWith('seed.ts')) {
   const seedData = generateSeedData();
   console.log(`✅ Generated MEDISTRY Synthetic Database:`);
-  console.log(`   • Facilities: ${seedData.facilities.length}`);
+  console.log(`   • Facilities: ${seedData.facilities.length} (${seedData.facilities.filter((f) => f.countryCode === 'KE').length} synthetic Kenyan)`);
   console.log(`   • Clinicians: ${seedData.clinicians.length}`);
   console.log(`   • Synthetic Patients: ${seedData.patients.length}`);
   console.log(`   • Priority Patient: ${seedData.patients[0].patient.id} (Sickle Cell SS, Penicillin Anaphylaxis)`);

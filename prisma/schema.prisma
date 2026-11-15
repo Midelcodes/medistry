@@ -126,6 +126,7 @@ model Facility {
   id              String             @id @default(uuid())
   name            String
   registrationNo  String             @unique // State MOH / CAC
+  registryCode    String?            // Kenya Master Facility List (KMFL) or Nigeria Health Facility Registry (HFR) code
   facilityType    String             // Hospital, Clinic, Diagnostic Centre
   address         String
   city            String
@@ -149,7 +150,8 @@ model Clinician {
   userId          String             @unique
   user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   fullName        String
-  licenseNumber   String             @unique // MDCN Folio number
+  licenseNumber   String             @unique // licence number in the clinician's licensing country (MDCN folio for NG)
+  countryCode     String             @default("NG") // licensing country; rules in src/lib/clinician/verification.ts
   specialty       String
   status          VerificationStatus @default(PENDING)
   verifiedAt      DateTime?
@@ -225,6 +227,7 @@ model Patient {
   cardIncludeRecentDiagnosis Boolean  @default(false)
   cardVersion                Int      @default(0)  // Version of the latest issued card (0 = none)
   cardStale                  Boolean  @default(false) // A signed record changed card content since the card was issued
+  preferredLocale            String?  // i18n locale for the printed card and notifications; English if null
 
   countryCode          String       @default("NG")
   primaryFacilityId    String?
@@ -270,6 +273,8 @@ model OfflineScanEvent {
   clinicianId         String
   clinician           Clinician         @relation(fields: [clinicianId], references: [id])
   facilityId          String
+  clinicianCountry    String            // scanning clinician's licensing country (from the signed pass)
+  cardCountry         String            // the card's (patient's) country; scans may cross borders
   reason              BreakGlassReason
   details             String?
   scannedAt           DateTime          // device clock at scan time
