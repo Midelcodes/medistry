@@ -175,7 +175,7 @@ describe('2. Scanner page, service worker and strings', () => {
     assert.match(src, /const CACHE_VERSION = 'medistry-scan-v\d+';/);
     const list = src.match(/const PRECACHE = \[([\s\S]*?)\];/)![1];
     const urls = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]).concat(list.includes('JWKS_URL') ? ['/.well-known/medistry-keys.json'] : []);
-    for (const u of ['/s', '/js/scan.js', '/js/lib/verifyCard.js', '/css/scan.css', '/vendor/jsQR.js', '/assets/favicon.svg', '/.well-known/medistry-keys.json']) {
+    for (const u of ['/s', '/js/scan.js', '/js/lib/verifyCard.js', '/js/lib/offlineScan.js', '/js/lib/scanStore.js', '/css/scan.css', '/vendor/jsQR.js', '/assets/favicon.svg', '/.well-known/medistry-keys.json']) {
       assert.ok(urls.includes(u), `precache list includes ${u}`);
     }
     for (const u of urls) assert.strictEqual((await fetch(`${base}${u}`)).status, 200, u);
@@ -189,10 +189,15 @@ describe('2. Scanner page, service worker and strings', () => {
     }
   });
 
-  test('The scanner never sends the token or card data anywhere: its only request is for the keys', () => {
+  test('The scanner never sends the card token or card contents: it fetches keys and uploads signed scan events only', () => {
     const src = fs.readFileSync('site/js/scan.js', 'utf-8');
     const fetches = [...src.matchAll(/fetch\(([^,)]+)/g)].map((m) => m[1].trim());
-    assert.deepStrictEqual(fetches, ['JWKS_URL']);
+    assert.deepStrictEqual(fetches, ['JWKS_URL', 'SCANS_URL']);
+    assert.match(src, /body: JSON\.stringify\(\{ events: batch \}\)/);
+    // The event carries the card's subject, version and key id, never the token or medical fields
+    const record = src.slice(src.indexOf('async function recordScan'), src.indexOf('async function lastCardStatus'));
+    assert.deepStrictEqual([...record.matchAll(/^\s{4}(\w+)[,:]/gm)].map((m) => m[1]), ['eventId', 'cardSub', 'cardVersion', 'cardKid', 'reason', 'details', 'scannedAt', 'pass']);
+    assert.ok(!/payload\.e\b|token\b(?!:)/.test(record.replace('ctx.pass.token', '')), 'no card contents or card token in the event');
     for (const banned of ['XMLHttpRequest', 'sendBeacon', 'WebSocket', 'EventSource', 'innerHTML', 'insertAdjacentHTML']) {
       assert.ok(!src.includes(banned), `scan.js must not use ${banned}`);
     }

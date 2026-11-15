@@ -44,19 +44,15 @@ export function extractToken(input) {
 }
 
 /**
- * Verifies a card token against a JWK set.
- * @param {string} token compact JWS
- * @param {Array<object>} jwks public keys ({kty, crv, x, y, kid, alg?})
- * @param {{ nowSeconds?: number, subtle?: SubtleCrypto }} [opts]
- * @returns {Promise<{status: string, payload?: object, error?: string, kid?: string}>}
+ * Checks an ES256 compact JWS signature against a JWK set. No claims are checked here.
+ * @returns {Promise<{status: 'ok'|'invalid'|'unknown_key', header?: object, payload?: object, error?: string, kid?: string}>}
  */
-export async function verifyCardToken(token, jwks, opts = {}) {
+export async function verifySignedToken(token, jwks, opts = {}) {
   const subtle = opts.subtle || globalThis.crypto?.subtle;
   if (!subtle) return { status: 'invalid', error: 'This browser cannot verify signatures (no WebCrypto).' };
-  const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
 
   const parts = typeof token === 'string' ? token.split('.') : [];
-  if (parts.length !== 3 || parts.some((p) => !B64URL.test(p))) return { status: 'invalid', error: 'Not a card token' };
+  if (parts.length !== 3 || parts.some((p) => !B64URL.test(p))) return { status: 'invalid', error: 'Not a signed token' };
   const [h, p, s] = parts;
 
   let header;
@@ -83,15 +79,49 @@ export async function verifyCardToken(token, jwks, opts = {}) {
   }
   if (!ok) return { status: 'invalid', error: 'Signature does not match: the card has been altered or was not issued by Medistry' };
 
-  // Only now is the payload trustworthy enough to read.
   let payload;
   try { payload = b64urlJson(p); } catch { return { status: 'invalid', error: 'Unreadable payload' }; }
+  return { status: 'ok', header, payload };
+}
+
+/**
+ * Verifies a card token against a JWK set.
+ * @param {string} token compact JWS
+ * @param {Array<object>} jwks public keys ({kty, crv, x, y, kid, alg?})
+ * @param {{ nowSeconds?: number, subtle?: SubtleCrypto }} [opts]
+ * @returns {Promise<{status: string, payload?: object, error?: string, kid?: string}>}
+ */
+export async function verifyCardToken(token, jwks, opts = {}) {
+  const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const sig = await verifySignedToken(token, jwks, opts);
+  if (sig.status !== 'ok') return { status: sig.status, error: sig.error, kid: sig.kid };
+
+  // Only now is the payload trustworthy enough to read.
+  const payload = sig.payload;
   if (!payload || payload.iss !== CARD_ISSUER) return { status: 'invalid', error: 'Card was not issued by Medistry' };
+  if (payload.typ === 'clinician-pass') return { status: 'invalid', error: 'This is a clinician pass, not a patient card' };
   if (payload.v !== CARD_SCHEMA_VERSION || !payload.e) return { status: 'unsupported', error: `Card format ${payload.v ?? 'legacy'} is not supported by this scanner` };
   if (typeof payload.exp !== 'number') return { status: 'invalid', error: 'Card has no expiry' };
   if (typeof payload.iat === 'number' && payload.iat > now + MAX_IAT_SKEW_SECONDS) {
     return { status: 'future', error: 'Card issue time is in the future. Check this device’s date and time.' };
   }
-  if (now >= payload.exp) return { status: 'expired', payload };
-  return { status: 'valid', payload };
+  if (now >= payload.exp) return { status: 'expired', payload, kid: sig.header.kid };
+  return { status: 'valid', payload, kid: sig.header.kid };
+}
+
+/**
+ * Checks a clinician pass on the device (signature, type, issuer, expiry).
+ * @returns {Promise<{status: 'valid'|'expired'|'invalid'|'unknown_key', payload?: object, error?: string}>}
+ */
+export async function verifyClinicianPass(pass, jwks, opts = {}) {
+  const now = opts.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const sig = await verifySignedToken(pass, jwks, opts);
+  if (sig.status !== 'ok') return { status: sig.status, error: sig.error };
+  const p = sig.payload;
+  if (!p || p.typ !== 'clinician-pass' || p.iss !== CARD_ISSUER || typeof p.sub !== 'string' || typeof p.dk !== 'string' || typeof p.exp !== 'number') {
+    return { status: 'invalid', error: 'Not a clinician pass' };
+  }
+  if (typeof p.iat === 'number' && p.iat > now + MAX_IAT_SKEW_SECONDS) return { status: 'invalid', error: 'Pass issue time is in the future' };
+  if (now >= p.exp) return { status: 'expired', payload: p };
+  return { status: 'valid', payload: p };
 }

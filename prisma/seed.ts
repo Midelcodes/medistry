@@ -38,7 +38,7 @@ export interface SeedClinician {
   licenseNumber: string;
   specialty: string;
   facilityId: string;
-  status: 'VERIFIED';
+  status: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
 }
 
 export interface SeedDatabasePayload {

@@ -26,6 +26,7 @@ import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKI
 import { buildOfflineCardBundle } from '../emergency/offlineCard.ts';
 import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
+import type { OfflineScanService } from '../emergency/offlineScans.ts';
 import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
 
 export interface PortalContext {
@@ -41,6 +42,7 @@ export interface PortalContext {
   emergencyEngine: EmergencyBreakGlassEngine;
   notifications: ConsoleNotificationProvider;
   offlineCards: OfflineCardStore;
+  offlineScans: OfflineScanService;
   dataDir: string;
 }
 
@@ -93,12 +95,12 @@ export function createPortalApi(ctx: PortalContext) {
     res.end(JSON.stringify(data));
   }
 
-  function readBody(req: http.IncomingMessage): Promise<any> {
+  function readBody(req: http.IncomingMessage, maxBytes = 64 * 1024): Promise<any> {
     return new Promise((resolve, reject) => {
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
-        if (body.length > 64 * 1024) {
+        if (body.length > maxBytes) {
           reject(new HttpError(413, 'Payload too large'));
           req.destroy();
         }
@@ -417,8 +419,14 @@ export function createPortalApi(ctx: PortalContext) {
         const body = await readBody(req);
         const reason = text(body.reason, 500);
         if (reason.length < 5) throw new HttpError(400, 'Please describe why you are disputing this access');
-        const ticket = ctx.accessLogManager.disputeAccess(patient.id, String(body.auditLogId || ''), reason);
-        return { ticket };
+        // Accepts an audit entry id, or an offline scan event id (offlineScanEventId, or passed as auditLogId).
+        const requested = String(body.offlineScanEventId || body.auditLogId || '');
+        const scan = ctx.offlineScans.getEvent(requested);
+        if (body.offlineScanEventId && (!scan || scan.patientId !== patient.id)) throw new HttpError(404, 'Offline scan event not found');
+        const auditLogId = scan && scan.patientId === patient.id ? scan.auditLogId : requested;
+        const ticket = ctx.accessLogManager.disputeAccess(patient.id, auditLogId, reason);
+        if (scan && scan.patientId === patient.id) ctx.offlineScans.markDisputed(scan.id);
+        return { ticket, offlineScanEventId: scan && scan.patientId === patient.id ? scan.id : undefined };
       }
 
       if (method === 'GET' && sub === 'consents') {
@@ -528,9 +536,25 @@ export function createPortalApi(ctx: PortalContext) {
         throw new HttpError(401, 'Invalid authenticator code');
       }
       loginFailures.delete(clinician.id);
+      // Optional: a scanner device sends its public key to get a 7-day offline pass bound to that key.
+      let offline: Record<string, string> = {};
+      if (body.devicePublicJwk !== undefined) {
+        let thumbprint: string;
+        try {
+          thumbprint = ctx.offlineScans.bindDeviceKey(clinician.id, body.devicePublicJwk);
+        } catch (err: any) {
+          throw new HttpError(400, err.message);
+        }
+        try {
+          const { pass, expiresAt } = ctx.offlineScans.issuePass(clinician.id, thumbprint);
+          offline = { pass, passExpiresAt: expiresAt, deviceKeyThumbprint: thumbprint };
+        } catch (err: any) {
+          offline = { passError: err.message };
+        }
+      }
       const token = issueToken(clinician.id);
       extraHeaders.set(req, { 'Set-Cookie': sessionCookie(req, token, Math.floor(SESSION_TTL_MS / 1000)) });
-      return { token, clinician: publicClinician(clinician), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000) };
+      return { token, clinician: publicClinician(clinician), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000), ...offline };
     }
 
     if (method === 'POST' && pathname === '/api/clinician/logout') {
@@ -540,6 +564,19 @@ export function createPortalApi(ctx: PortalContext) {
     }
 
     if (!pathname.startsWith('/api/clinician/') && !pathname.startsWith('/api/emergency/')) return undefined;
+
+    // Offline scan events. No session needed: each event carries a server-signed pass and is signed by the
+    // device key bound into that pass, so the upload is authenticated per event.
+    if (method === 'POST' && pathname === '/api/emergency/offline-scans') {
+      const body = await readBody(req, 512 * 1024);
+      let results;
+      try {
+        results = ctx.offlineScans.processBatch(body.events, { ipAddress: clientIp(req), userAgent: String(req.headers['user-agent'] || '').slice(0, 200) });
+      } catch (err: any) {
+        throw new HttpError(400, err.message);
+      }
+      return { results };
+    }
 
     // ---------- Everything below needs a clinician session ----------
     if (method === 'POST' && pathname === '/api/emergency/break-glass') {
@@ -571,6 +608,22 @@ export function createPortalApi(ctx: PortalContext) {
     const clinician = currentClinician(req);
 
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
+
+    if (method === 'POST' && pathname === '/api/clinician/device-key') {
+      const body = await readBody(req);
+      let thumbprint: string;
+      try {
+        thumbprint = ctx.offlineScans.bindDeviceKey(clinician.id, body.publicJwk);
+      } catch (err: any) {
+        throw new HttpError(400, err.message);
+      }
+      try {
+        const { pass, expiresAt } = ctx.offlineScans.issuePass(clinician.id, thumbprint);
+        return { pass, passExpiresAt: expiresAt, deviceKeyThumbprint: thumbprint };
+      } catch (err: any) {
+        throw new HttpError(403, err.message);
+      }
+    }
 
     if (method === 'POST' && pathname === '/api/clinician/lookup') {
       const body = await readBody(req);

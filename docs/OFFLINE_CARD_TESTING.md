@@ -32,6 +32,17 @@ Synthetic data only. Use a demo patient from the patient portal.
 - Device language Swahili: scanner strings appear in Swahili.
 - Browser without `BarcodeDetector` (for example iOS Safari, desktop Firefox): camera scanning uses the vendored jsQR.
 
+## Accountable scans (clinician pass)
+
+| # | Step | Expected |
+|---|---|---|
+| 6 | Online, open **Clinician pass** on `/s` and sign in. | "{name}, pass valid until {date}" (7 days). |
+| 7 | Go offline. Scan a card whose patient opted in conditions or medicines. | Core fields show at once; opt-in fields stay locked behind a reason form. |
+| 8 | Choose a reason and press **Record scan and show conditions and medicines**. | Opt-in fields appear; "1 scan(s) waiting to upload". |
+| 9 | Go online. | Within a minute the queue empties; the patient sees the scan in the portal (Alerts and Access log) and can dispute it. |
+| 10 | Reissue the card in the portal, scan the OLD card, record a reason and let it sync, then scan the old card again. | Banner: the server reported the card was replaced by a newer version. |
+| 11 | **Remove pass from this device**, scan again. | Core fields only, plus "Sign in as a clinician to see conditions and medications". |
+
 ## Known limits
 
 - Offline verification proves the card was issued by Medistry and is unexpired. It cannot tell whether
@@ -45,3 +56,4 @@ Synthetic data only. Use a demo patient from the patient portal.
 | Date | Who | Device / browser | Steps passed | Notes |
 |---|---|---|---|---|
 | 2026-11-15 | Claude (automated, headless Chrome over DevTools, phone-size viewport) | Chrome desktop, headless, http://localhost | 1, 2, 3, 4, 5 | Offline = server stopped and browser network emulated offline. Step 4 used the card's QR link (fresh open and same-tab) instead of a camera; camera scanning, BarcodeDetector and jsQR were not exercised. Real phones not tested. |
+| 2026-11-15 | Claude (automated, headless Chrome over DevTools) | Chrome desktop, headless, http://localhost | 6, 7, 8, 9, 10, 11 | Offline = DevTools network emulation with the server running (device-key bindings are in server memory in this build). Camera not exercised. |

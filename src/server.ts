@@ -19,6 +19,7 @@ import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
 import { getPublicJwks } from './lib/crypto/cardKeys.ts';
 import { OfflineCardStore } from './lib/emergency/offlineCardStore.ts';
+import { OfflineScanService } from './lib/emergency/offlineScans.ts';
 import { generateWalletCardSvg, generateWristbandSvg, DEFAULT_CONFIG } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
 import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
@@ -94,6 +95,14 @@ const handlePortalApi = createPortalApi({
   emergencyEngine,
   notifications: consoleProvider,
   offlineCards: offlineCardStore,
+  offlineScans: new OfflineScanService({
+    auditManager,
+    dispatcher,
+    cardStore: offlineCardStore,
+    clinicians: seedData.clinicians,
+    facilities: seedData.facilities,
+    patientsById,
+  }),
   dataDir: path.join(ROOT_DIR, 'data'),
 });
 

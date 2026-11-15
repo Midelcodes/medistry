@@ -29,6 +29,7 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
   1. **Zero PHI on Card**: The physical card, sticker, and NFC tag encode strictly an opaque URL: `https://medistry.health/e/<code>`. No name, genotype, blood type, or condition is printed on the default card.
   2. **Emergency Gate**: Scanning the code requires a verified clinician with 2FA/TOTP credentials. Anonymous viewers see only a "Hospital Emergency Gateway" portal.
   3. **Instant Revocation & Reissuance**: If a card is lost, the patient can revoke the code with 1 click in their patient portal. The old code becomes immediately non-functional (`STATUS: REVOKED`), while all historical medical records and FHIR resources are preserved.
+* **Note (offline emergency card)**: the points above describe the online code card, wristband and NFC tag. The **offline emergency card is different**: it prints the core fields (blood group, genotype, severe allergies, DNR, emergency contact) on the back, and its QR carries a signed, **unencrypted** copy of those fields plus anything the patient opted in. A lost offline card exposes that data to whoever finds it, and revoking or reissuing it does not stop the old card from verifying offline. See section 3.
 
 ### Threat 3: Rogue Clinician Browsing Records
 * **Attack**: An authenticated doctor abuses their medical credentials to look up records of individuals not under their care.
@@ -72,3 +73,106 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
   4. **Strict HSTS**: `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`.
   5. **Anti-CSRF Validation**: Cryptographic double-submit cookie verification on all state-altering endpoints.
 
+---
+
+## 3. Offline Emergency Card (Signed QR), Clinician Passes and Offline Scans
+
+Scope: the signed QR emergency card, the offline scanner at `/s`, clinician passes, device keys and
+offline scan events. Synthetic data only. Nothing here has had a legal or regulatory review.
+
+### The most important fact
+
+**The QR data is signed, not encrypted.** Anyone with any QR reader can decode the card and read
+everything in it, including any conditions, medicines or recent diagnosis the patient opted in.
+
+- The signature (ES256) proves the card was issued by Medistry and has not been altered. It does not
+  hide anything.
+- In the scanner, the split between **core fields** (blood group, genotype, severe allergies, DNR, organ
+  donor, emergency contact) and **opt-in fields** (conditions, medicines, recent diagnosis) is a
+  **presentation and audit boundary, not cryptographic secrecy.** The Medistry scanner shows opt-in fields
+  only to a signed-in clinician who records a reason, so that scan is logged and the patient is notified.
+  Someone using a different QR reader is not stopped and is not logged.
+- **The real privacy control is the patient's opt-in.** Nothing beyond the core fields is on the card
+  unless the patient chose it, item by item, in the patient portal, which warns that anyone who reads the
+  QR can see what is in it.
+- The core fields are also printed in plain text on the back of the card.
+
+### Assets
+
+| Asset | Where it lives | Why it matters |
+|---|---|---|
+| Card signing key (ES256 private key) | Server only (`OFFLINE_CARD_PRIVATE_KEY`) | Whoever holds it can forge cards and clinician passes |
+| Public keys (JWKS) | `/.well-known/medistry-keys.json`, embedded in `/s`, cached on scanners | Verify only; cannot sign |
+| Card contents | Inside the QR, and core fields printed on the card | Patient health data |
+| Clinician pass | Scanner IndexedDB; 7-day ES256 token naming clinician, facility, licence, device key | Lets a device unlock opt-in fields and create scan events |
+| Device private key | Scanner WebCrypto, **non-extractable**, in IndexedDB | Signs scan events; binds the pass to one device |
+| Scan events | Scanner queue, then the server registry and the audit chain | Accountability for each scan |
+
+### What each mechanism does and does not prove
+
+#### Card signature (ES256)
+- Proves: issued by Medistry, unchanged since issue, not expired (if `exp` has not passed).
+- Does not prove: that the card is still the current one. A superseded or revoked card still verifies
+  offline. The scanner learns otherwise only after a sync, and then shows a banner the next time that
+  card is scanned.
+- Scanners hold only public keys, so a compromised scanner cannot forge cards.
+- The same key signs clinician passes. They are kept apart by claims: a pass has `typ: "clinician-pass"`
+  and no card fields, and the card verifier rejects it; a card has no `typ` or `dk`, and the pass
+  verifier rejects it.
+
+#### Clinician pass + device key
+- The pass is issued only to a clinician whose status is `VERIFIED`, at sign-in, and is bound to the
+  RFC 7638 thumbprint of a device public key.
+- A copied pass alone cannot create events: every event must also be signed by the device's private key,
+  which WebCrypto will not export.
+- A stolen, unlocked device can create events and show opt-in fields until the pass expires (up to
+  7 days). Suspending the clinician makes the server reject that clinician's uploads, but an offline
+  device cannot learn about the suspension until it syncs. There is **no offline revocation** of passes
+  or device keys. Device-key revocation is not implemented yet (TODO; `ClinicianDeviceKey.revokedAt`
+  exists in the schema).
+- Clinician verification itself is still a manual, demo-level check in this build; see the README.
+
+#### Offline scan events
+- An event is the clinician device's **signed statement** that it scanned card (subject, version, key id)
+  for a stated reason at a stated time. The server cannot prove a physical scan happened or that the
+  reason is true.
+- The event never contains the card token or its medical contents.
+- Server checks: pass signature and expiry **at scan time** (a pass that expired later is fine), device
+  signature against the bound key, clinician still `VERIFIED` at upload, scan time within the last
+  30 days and no more than 5 minutes ahead, known patient, at most 50 events per batch.
+- Replay: the eventId is idempotent. The same signed event again is `duplicate` and writes nothing; a
+  reused eventId with different content is rejected.
+- Withholding: a device can simply never upload. The Medistry scanner queues the event before showing
+  opt-in fields and retries every 60 seconds while online, but a modified client could skip this.
+  Accountability is therefore best effort for offline scans. Unexplained gaps (for example a patient
+  reporting a scan that never appears) should be investigated.
+- The device clock sets `scannedAt`. A clinician could back-date a scan within the pass lifetime and the
+  30-day window.
+- Each accepted event writes an `OFFLINE_EMERGENCY_SCAN` entry (access type emergency, with reason,
+  facility and device thumbprint) to the tamper-evident audit chain, and notifies the patient by push.
+  Emergency contacts are not notified of offline scans (online break-glass does notify them). The patient
+  can dispute the scan by its event id.
+
+### Other risks and limits
+
+- **Photographed or copied cards** are still genuine cards. Anyone who copies one can read its contents.
+- **Device clock wrong:** a card whose issue time looks more than 5 minutes in the future is not shown.
+  A clinician would then have to rely on the printed core fields.
+- **Development keys:** without `OFFLINE_CARD_PRIVATE_KEY`, the server uses a random per-process key, so
+  cards and passes from a previous run stop verifying. Production with `DEMO_MODE=0` refuses to start
+  without the key.
+- **In-memory build:** card rows, device-key bindings, passes and scan events are lost on restart in this
+  build. `prisma/schema.prisma` has the persistent design (`OfflineCard`, `ClinicianDeviceKey`,
+  `OfflineScanEvent`), which is not wired yet.
+- **Key compromise:** a leaked signing key lets an attacker forge cards and passes. Rotate it with
+  `OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS` for a transition, then remove the old key. Scanners pick up the
+  change only when they come online.
+- **Notifications** use a console provider in the demo; real SMS or push delivery is not wired.
+
+### Open items
+
+- Device-key revocation and a revocation list that scanners can cache.
+- Persistent storage for cards, device keys and scan events.
+- Real notification delivery, and deciding whether emergency contacts should also be told about offline scans.
+- Legal review of what may be printed on a card and shown without authentication, under the Nigeria
+  Data Protection Act 2023.

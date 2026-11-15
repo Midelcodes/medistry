@@ -47,3 +47,24 @@
 .res-stop.red { background: #b91c1c; color: #ffffff; }
 .res-stop.amber { background: #fef3c7; color: #78350f; }
 .res-stop .scan-btn { border-color: currentColor; }
+
+/* Clinician pass panel and the reason gate before opt-in fields */
+.clin-panel { border: 2px solid #cbd5e1; border-radius: 12px; padding: 10px 14px; margin: 0 0 18px; background: #ffffff; }
+.clin-panel summary { cursor: pointer; min-height: 32px; line-height: 1.5; }
+.clin-note { color: #334155; margin: 8px 0; }
+.clin-form { display: grid; gap: 6px; margin: 8px 0; }
+.clin-form label { font-weight: 700; }
+.clin-form select, .clin-form input { min-height: 44px; font-size: 1rem; padding: 6px 10px; border: 2px solid #64748b; border-radius: 8px; }
+.clin-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.clin-row input { flex: 1; min-width: 120px; letter-spacing: 0.2em; }
+.queue-status { font-size: 0.85rem; color: #334155; }
+.res-status-banner { background: #fef3c7; color: #78350f; border: 3px solid #b45309; border-radius: 12px; padding: 12px 14px; font-weight: 800; margin-bottom: 12px; }
+.res-locked { border: 2px dashed #64748b; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+.res-locked p { margin: 0 0 8px; font-weight: 700; }
+.reason-form { display: grid; gap: 8px; }
+.reason-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
+.reason-form legend { font-weight: 800; margin-bottom: 4px; }
+.reason-form label.opt { display: flex; gap: 10px; align-items: center; min-height: 40px; font-size: 1.05rem; }
+.reason-form input[type="radio"] { width: 20px; height: 20px; }
+.reason-form textarea { width: 100%; padding: 8px; border: 2px solid #64748b; border-radius: 8px; font-size: 1rem; }
+.res-recorded { color: #166534; font-weight: 700; }

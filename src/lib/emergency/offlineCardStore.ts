@@ -117,6 +117,30 @@ export class OfflineCardStore {
     return { ...this.issue(patient, opts), reused: false };
   }
 
+  /** Revokes a card version (for example a lost card). Offline scanners learn of it only after a sync. */
+  revoke(patientId: string, version: number, reason: string): OfflineCardRecord {
+    const id = (this.byPatient.get(patientId) || []).find((cid) => this.cards.get(cid)!.version === version);
+    if (!id) throw new Error('Card not found');
+    const card = this.cards.get(id)!;
+    if (!card.revokedAt) {
+      card.revokedAt = new Date().toISOString();
+      card.revocationReason = reason;
+      if (this.currentTokens.get(patientId)?.cardId === id) this.currentTokens.delete(patientId);
+      this.auditManager?.appendEntry({
+        actorId: patientId,
+        subjectId: patientId,
+        action: 'OFFLINE_CARD_REVOKED',
+        accessType: 'NORMAL_CONSENT',
+        resourceType: 'OfflineCard',
+        resourceId: id,
+        ipAddress: '127.0.0.1',
+        userAgent: 'PatientPortal/1.0',
+        reason: `Offline card v${version} revoked`,
+      });
+    }
+    return { ...card };
+  }
+
   /** The newest card that has not been superseded or revoked. */
   getCurrent(patientId: string): OfflineCardRecord | undefined {
     const ids = this.byPatient.get(patientId) || [];

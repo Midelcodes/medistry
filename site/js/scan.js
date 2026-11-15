@@ -1,11 +1,24 @@
 /* Offline emergency card scanner (/s).
- * Verifies the card's ES256 signature on this device with WebCrypto. The token and the decoded data are
- * never sent anywhere: the only network request this page makes is for the public keys.
+ * Verifies the card's ES256 signature on this device with WebCrypto.
  * Input order: token in the URL hash (QR opened with a phone camera) > camera scan > pasted link or code.
+ *
+ * Accountability (Phase 5): core fields (blood group, genotype, severe allergies, DNR, organ donor and the
+ * emergency contact, all printed on the card anyway) show at once. Opt-in fields (conditions, medicines,
+ * recent diagnosis) show only to a clinician with a valid pass, after they give a reason; that creates a
+ * scan event signed by this device's key, queued in IndexedDB and uploaded when online.
+ * This split is a presentation and audit boundary, NOT secrecy: the QR is signed, not encrypted, and any
+ * QR reader can decode it. See docs/THREAT_MODEL.md.
+ *
+ * Network requests: the public keys; clinician sign-in (on request); and the scan-event upload, which carries
+ * the card's subject, version and key id but never the card token or its medical contents.
  */
-import { verifyCardToken, extractToken } from '/js/lib/verifyCard.js';
+import { verifyCardToken, verifyClinicianPass, extractToken } from '/js/lib/verifyCard.js';
+import { signScanEvent, SCAN_REASONS, MAX_BATCH } from '/js/lib/offlineScan.js';
+import { kvGet, kvSet, kvDelete, queueAdd, queueAll, queueDelete, getOrCreateDeviceKey } from '/js/lib/scanStore.js';
 
 const JWKS_URL = '/.well-known/medistry-keys.json';
+const SCANS_URL = '/api/emergency/offline-scans';
+const SYNC_INTERVAL_MS = 60_000;
 const KEY_STORE = 'medistry.scan.jwks';
 const $ = (sel) => document.querySelector(sel);
 
@@ -116,9 +129,15 @@ function renderStop(kind, title, detail) {
   again.focus();
 }
 
-function renderCard(payload, expired) {
+function renderCard(payload, expired, ctx) {
   const e = payload.e || {};
   const wrap = el('div', expired ? 'res-unverified' : null);
+
+  if (ctx.cardStatus === 'superseded' || ctx.cardStatus === 'revoked') {
+    const banner = el('div', 'res-status-banner', tr(ctx.cardStatus === 'revoked' ? 'scan_card_revoked' : 'scan_card_superseded'));
+    banner.setAttribute('role', 'alert');
+    wrap.append(banner);
+  }
 
   if (expired) {
     const warn = el('div', 'res-expired', tr('scan_expired', { date: fmtDay(payload.exp) }));
@@ -129,6 +148,7 @@ function renderCard(payload, expired) {
     wrap.append(el('span', 'res-badge', tr('scan_valid_badge')));
   }
 
+  // ---- Core fields: life-critical and printed on the card, shown at once ----
   const vitals = el('div', 'res-vitals');
   for (const [label, value] of [['scan_blood_group', e.bg], ['scan_genotype', e.gt]]) {
     const box = el('div', 'res-vital');
@@ -154,21 +174,6 @@ function renderCard(payload, expired) {
   }
   wrap.append(alg);
 
-  const list = (labelKey, items) => {
-    const sec = el('div', 'res-section');
-    sec.append(el('div', 'res-label', tr(labelKey)));
-    const ul = el('ul');
-    for (const i of items) ul.append(el('li', null, i));
-    sec.append(ul);
-    wrap.append(sec);
-  };
-  if (Array.isArray(e.cond) && e.cond.length) list('scan_conditions', e.cond);
-  if (Array.isArray(e.med) && e.med.length) list('scan_medications', e.med.map((m) => (m.d ? `${m.n}: ${m.d}` : m.n)));
-  if (e.dx && e.dx.t) {
-    const sec = el('div', 'res-section');
-    sec.append(el('div', 'res-label', tr('scan_recent_dx')), el('p', null, e.dx.d ? `${e.dx.t} (${e.dx.d})` : e.dx.t));
-    wrap.append(sec);
-  }
   if (e.od) wrap.append(el('div', 'res-section', tr('scan_organ_donor')));
 
   if (e.ec && (e.ec.n || e.ec.p)) {
@@ -184,10 +189,103 @@ function renderCard(payload, expired) {
     wrap.append(sec);
   }
 
+  // ---- Opt-in fields: only for a clinician with a valid pass, after a reason is recorded ----
+  wrap.append(gatedSection(payload, ctx));
+
   const foot = el('p', 'res-foot', tr(expired ? 'scan_footer_unverified' : 'scan_footer_verified', { cv: payload.cv ?? '?', date: fmtDay(payload.iat) }));
   if (!expired) foot.append(document.createElement('br'), document.createTextNode(tr('scan_valid_until', { date: fmtDay(payload.exp) })));
   wrap.append(foot, againButton());
   showResult(wrap);
+}
+
+function hasOptIns(e) {
+  return (Array.isArray(e.cond) && e.cond.length > 0) || (Array.isArray(e.med) && e.med.length > 0) || !!(e.dx && e.dx.t);
+}
+
+function renderOptIns(box, e) {
+  const list = (labelKey, items) => {
+    const sec = el('div', 'res-section');
+    sec.append(el('div', 'res-label', tr(labelKey)));
+    const ul = el('ul');
+    for (const i of items) ul.append(el('li', null, i));
+    sec.append(ul);
+    box.append(sec);
+  };
+  if (Array.isArray(e.cond) && e.cond.length) list('scan_conditions', e.cond);
+  if (Array.isArray(e.med) && e.med.length) list('scan_medications', e.med.map((m) => (m.d ? `${m.n}: ${m.d}` : m.n)));
+  if (e.dx && e.dx.t) {
+    const sec = el('div', 'res-section');
+    sec.append(el('div', 'res-label', tr('scan_recent_dx')), el('p', null, e.dx.d ? `${e.dx.t} (${e.dx.d})` : e.dx.t));
+    box.append(sec);
+  }
+  if (!hasOptIns(e)) box.append(el('p', null, tr('scan_no_optins')));
+}
+
+/** Locked box: sign-in prompt without a pass; a reason form with one. Submitting records a signed event. */
+function gatedSection(payload, ctx) {
+  const e = payload.e || {};
+  const box = el('div', 'res-locked');
+
+  if (!ctx.pass) {
+    box.append(el('p', null, tr('scan_signin_needed')));
+    if (navigator.onLine) {
+      const b = el('button', 'scan-btn', tr('scan_signin_button'));
+      b.type = 'button';
+      b.addEventListener('click', () => { const panel = $('#clin-panel'); panel.open = true; panel.scrollIntoView({ behavior: 'smooth' }); $('#clin-totp')?.focus(); });
+      box.append(b);
+    } else {
+      box.append(el('p', 'clin-note', tr('scan_signin_offline')));
+    }
+    return box;
+  }
+
+  const form = el('form', 'reason-form');
+  const fs = el('fieldset');
+  fs.append(el('legend', null, tr('scan_reason_title')));
+  for (const r of SCAN_REASONS) {
+    const label = el('label', 'opt');
+    const input = el('input');
+    input.type = 'radio';
+    input.name = 'scan-reason';
+    input.value = r;
+    input.required = true;
+    label.append(input, el('span', null, tr(`scan_reason_${r}`)));
+    fs.append(label);
+  }
+  const detailsLabel = el('label', null, tr('scan_reason_details'));
+  const details = el('textarea');
+  details.rows = 2;
+  details.maxLength = 500;
+  detailsLabel.hidden = true;
+  details.hidden = true;
+  detailsLabel.htmlFor = details.id = 'scan-reason-details';
+  const msg = el('p', 'scan-msg');
+  msg.setAttribute('role', 'alert');
+  const submit = el('button', 'scan-btn primary', tr(hasOptIns(e) ? 'scan_record_and_show' : 'scan_record_only'));
+  submit.type = 'submit';
+  form.append(fs, detailsLabel, details, msg, submit);
+  form.addEventListener('change', () => {
+    const other = form.querySelector('input[name="scan-reason"]:checked')?.value === 'OTHER';
+    detailsLabel.hidden = !other;
+    details.hidden = !other;
+  });
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const reason = form.querySelector('input[name="scan-reason"]:checked')?.value;
+    if (!reason) return;
+    const text = details.value.trim();
+    if (reason === 'OTHER' && text.length < 5) { msg.textContent = tr('scan_reason_details_needed'); return; }
+    submit.disabled = true;
+    try {
+      await recordScan(payload, ctx, reason, reason === 'OTHER' ? text : undefined);
+    } catch {
+      // The event could not be stored or signed. Clinical care comes first: still show the data.
+    }
+    box.replaceChildren(el('p', 'res-recorded', tr('scan_recorded')));
+    renderOptIns(box, e);
+  });
+  box.append(form);
+  return box;
 }
 
 function showResult(node) {
@@ -208,13 +306,120 @@ async function handleToken(raw) {
     result = await verifyCardToken(token, currentKeys());
   }
   setMsg('');
+  if (result.status === 'valid' || result.status === 'expired') {
+    const ctx = { pass: await currentPass(), kid: result.kid, cardStatus: await lastCardStatus(result.payload) };
+    return renderCard(result.payload, result.status === 'expired', ctx);
+  }
   switch (result.status) {
-    case 'valid': return renderCard(result.payload, false);
-    case 'expired': return renderCard(result.payload, true);
     case 'unknown_key': return renderStop('amber', tr('scan_unknown_key'));
     case 'future': return renderStop('amber', tr('scan_future'));
     case 'unsupported': return renderStop('amber', tr('scan_unsupported'));
     default: return renderStop('red', tr('scan_not_genuine'), tr('scan_not_genuine_detail'));
+  }
+}
+
+// ---------- Clinician pass (bound to this device's non-extractable key) ----------
+/** The stored pass if it verifies and has not expired, else null. */
+async function currentPass() {
+  try {
+    const pass = await kvGet('pass');
+    if (!pass) return null;
+    const r = await verifyClinicianPass(pass, currentKeys());
+    return r.status === 'valid' ? { token: pass, claims: r.payload } : null;
+  } catch { return null; }
+}
+
+async function showPassStatus() {
+  let text = tr('scan_pass_none');
+  let has = false;
+  try {
+    const pass = await kvGet('pass');
+    if (pass) {
+      const r = await verifyClinicianPass(pass, currentKeys());
+      has = true;
+      text = r.status === 'valid' ? tr('scan_pass_valid', { name: r.payload.name || r.payload.sub, date: fmtDay(r.payload.exp) }) : tr('scan_pass_expired');
+    }
+  } catch { /* storage unavailable */ }
+  $('#pass-status').textContent = text;
+  $('#clin-remove').hidden = !has;
+  $('#clin-form').hidden = !navigator.onLine;
+  $('#clin-offline').hidden = navigator.onLine;
+  try {
+    const n = (await queueAll()).length;
+    $('#queue-status').textContent = n ? `(${tr('scan_queue_waiting', { n })})` : '';
+  } catch { $('#queue-status').textContent = ''; }
+}
+
+let loginBound = false;
+function bindSignIn() {
+  if (loginBound || !navigator.onLine || !window.Medistry) return;
+  loginBound = true;
+  window.Medistry.bindClinicianLogin({
+    select: '#clin-select', totp: '#clin-totp', error: '#clin-error', showCode: '#clin-show-code', form: '#clin-form',
+    extraBody: async () => ({ devicePublicJwk: (await getOrCreateDeviceKey()).publicJwk }),
+    onSignedIn: async (_clinician, data) => {
+      if (data && data.pass) {
+        try { await kvSet('pass', data.pass); } catch { /* storage unavailable */ }
+      } else if (data && data.passError) {
+        $('#clin-error').textContent = data.passError;
+      }
+      await showPassStatus();
+      syncQueue();
+    },
+  });
+}
+
+// ---------- Scan events: signed by the device key, queued, uploaded when online ----------
+async function recordScan(payload, ctx, reason, details) {
+  const device = await getOrCreateDeviceKey();
+  const event = await signScanEvent({
+    eventId: crypto.randomUUID(),
+    cardSub: payload.sub,
+    cardVersion: payload.cv,
+    cardKid: ctx.kid,
+    reason,
+    details,
+    scannedAt: new Date().toISOString(),
+    pass: ctx.pass.token,
+  }, device.privateKey);
+  await queueAdd(event);
+  await showPassStatus();
+  syncQueue();
+}
+
+async function lastCardStatus(payload) {
+  try { return (await kvGet(`cardStatus:${payload.sub}:${payload.cv}`)) || 'current'; } catch { return 'current'; }
+}
+
+let syncing = false;
+async function syncQueue() {
+  if (syncing || !navigator.onLine) return;
+  syncing = true;
+  try {
+    const events = await queueAll();
+    for (let i = 0; i < events.length; i += MAX_BATCH) {
+      const batch = events.slice(i, i + MAX_BATCH);
+      const res = await fetch(SCANS_URL, {
+        method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: batch }),
+      });
+      if (!res.ok) break; // server or network trouble: keep the queue and retry later
+      const { results } = await res.json();
+      const done = [];
+      for (const r of results || []) {
+        // accepted, duplicate and rejected are all final answers; only those leave the queue
+        if (r && ['accepted', 'duplicate', 'rejected'].includes(r.status)) done.push(r.eventId);
+        const ev = batch.find((b) => b.eventId === r.eventId);
+        if (ev && r.cardStatus) {
+          if (r.cardStatus === 'current') await kvDelete(`cardStatus:${ev.cardSub}:${ev.cardVersion}`);
+          else await kvSet(`cardStatus:${ev.cardSub}:${ev.cardVersion}`, r.cardStatus);
+        }
+      }
+      await queueDelete(done);
+    }
+  } catch { /* offline or storage unavailable: try again later */ }
+  finally {
+    syncing = false;
+    showPassStatus();
   }
 }
 
@@ -304,13 +509,21 @@ function stopCamera() {
 function init() {
   applyStrings();
   showNetwork();
-  window.addEventListener('online', () => { showNetwork(); refreshKeys(); });
-  window.addEventListener('offline', showNetwork);
+  window.addEventListener('online', () => { showNetwork(); refreshKeys(); bindSignIn(); showPassStatus(); syncQueue(); });
+  window.addEventListener('offline', () => { showNetwork(); showPassStatus(); });
+  setInterval(() => { if (navigator.onLine) syncQueue(); }, SYNC_INTERVAL_MS);
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js', { scope: '/s' }).catch(() => { /* offline support unavailable */ });
   }
-  if (navigator.onLine) refreshKeys();
+  if (navigator.onLine) { refreshKeys(); syncQueue(); }
+  showPassStatus();
+  $('#clin-panel').addEventListener('toggle', () => { if ($('#clin-panel').open) bindSignIn(); });
+  $('#clin-remove').addEventListener('click', async () => {
+    try { await kvDelete('pass'); } catch { /* storage unavailable */ }
+    if (window.Medistry) window.Medistry.signOut();
+    showPassStatus();
+  });
 
   $('#cam-start').addEventListener('click', startCamera);
   $('#cam-stop').addEventListener('click', stopCamera);

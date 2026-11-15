@@ -124,13 +124,15 @@
       const btn = $('button[type="submit"]', e.target);
       btn.disabled = true;
       try {
+        // opts.extraBody lets a page add fields (the scanner adds its device public key to get an offline pass)
+        const extra = opts.extraBody ? await opts.extraBody() : {};
         const data = await api('/api/clinician/login', {
           method: 'POST', auth: false,
-          body: { clinicianId: select.value, totp: totp.value.trim() },
+          body: { clinicianId: select.value, totp: totp.value.trim(), ...extra },
         });
         Session.set({ token: data.token, clinician: data.clinician });
         totp.value = '';
-        opts.onSignedIn(data.clinician);
+        await opts.onSignedIn(data.clinician, data);
       } catch (err) {
         setError(errorEl, err.message);
       } finally {

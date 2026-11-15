@@ -69,6 +69,7 @@ export class PatientAccessLogManager {
   }
 
   private formatActionDescription(action: string, resourceType?: string): string {
+    if (action === 'OFFLINE_EMERGENCY_SCAN') return '🚨 Offline Emergency Card Scan (break-glass)';
     if (action.includes('EMERGENCY_BREAK_GLASS')) return '🚨 Emergency Break-Glass Scan & Critical Summary View';
     if (action.includes('CLINICAL_RECORD_WRITE')) return `✍️ Authored New ${resourceType || 'Clinical'} Record`;
     if (action.includes('CLINICAL_RECORD_VERSION_UPDATE')) return `🔄 Updated ${resourceType || 'Clinical'} Record (New Version)`;
