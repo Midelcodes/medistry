@@ -102,7 +102,7 @@ describe('1. Browser verifier (site/js/lib/verifyCard.js) against server-signed 
     const store = createCardKeyStore(crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey);
     const jwks = store.getPublicJwks();
     const base = { iss: 'medistry', v: 1, cv: 1, iat: now(), exp: now() + 3600, e: { bg: 'O+', gt: 'AA' } };
-    assert.strictEqual((await verifyCardToken(store.signCompactJws({ ...base, iss: 'MEDISTRY_REGIONAL_HEALTH_AUTHORITY' }), jwks)).status, 'invalid');
+    assert.strictEqual((await verifyCardToken(store.signCompactJws({ ...base, iss: 'not-medistry' }), jwks)).status, 'invalid');
     assert.strictEqual((await verifyCardToken(store.signCompactJws({ ...base, v: undefined }), jwks)).status, 'unsupported');
     assert.strictEqual((await verifyCardToken(store.signCompactJws({ ...base, exp: undefined }), jwks)).status, 'invalid');
   });

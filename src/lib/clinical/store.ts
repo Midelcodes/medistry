@@ -500,6 +500,17 @@ export class ClinicalDataStore {
   }
 
   /**
+   * Latest doctor-signed (final) versions of one resource type for a patient. No policy check or audit:
+   * for callers that are already authorised (see clinical/encounters.ts). Drafts are never returned.
+   */
+  getLatestFinalRecords(patientId: string, resourceType: string): Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> {
+    return (this.patientIndex.get(patientId) || [])
+      .map((id) => this.records.get(id)!)
+      .filter((r) => r && r.isLatest && r.status === 'final' && r.resourceType === resourceType)
+      .map((record) => ({ record, resource: this.decrypt(record) }));
+  }
+
+  /**
    * Retrieve a single record by ID.
    */
   getRecordById(recordId: string): StoredClinicalRecord | undefined {

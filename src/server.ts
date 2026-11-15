@@ -83,7 +83,8 @@ for (const c of seedData.clinicians) {
   accessLogManager.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
   accessLogManager.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
 }
-seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities);
+seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities,
+  new Map(seedData.patients.map((p) => [p.patient.id, p.encounters])));
 
 // From now on, doctor-signed records keep the emergency card fields in step (seed records are already applied).
 const cardSync = new CardContentSync({ patientsById, dispatcher, auditManager });

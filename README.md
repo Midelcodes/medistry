@@ -1,5 +1,7 @@
 # MEDISTRY — Patient Medical-Record Portability & Emergency Break-Glass Platform
 
+[![CI](https://github.com/Midelcodes/medistry/actions/workflows/ci.yml/badge.svg)](https://github.com/Midelcodes/medistry/actions/workflows/ci.yml)
+
 **MEDISTRY** is a patient medical-record portability platform designed to allow patients' clinical histories to seamlessly follow them across hospitals, while giving attending doctors an instant, break-glass emergency scan when a patient is unconscious and their phone is locked.
 
 ---
@@ -10,7 +12,6 @@
 - **Demo mode (default).** The patient directory, patient portal and card generators are unauthenticated by design so visitors can explore. Set `DEMO_MODE=0` to disable them. Patient sign-in is not implemented, so do not run real data on this build.
 - **Secrets.** `JWT_SECRET` and `FIELD_ENCRYPTION_KEY` must be set to private values (`openssl rand -hex 32`). If unset or equal to a value published in this repo, a random per-process key is used. `OFFLINE_CARD_PRIVATE_KEY` (ES256 card signing key) comes from `node scripts/gen-card-key.mjs`; without it a random per-process key is used in dev, and the server refuses to start in production with `DEMO_MODE=0`.
 - **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
-- **Emergency summary "recent encounters"** are placeholder data in this build, not read from the clinical store.
 - Hosting is outside Nigeria for the public demo; the data is synthetic. A real deployment needs an in-country region.
 - Compliance wording describes design intent only and has had no legal review.
 
@@ -43,8 +44,9 @@
    - Append-only, SHA-256 hash-chained audit ledger linking every read and write to detect tampering.
    - Patient-visible **"Who accessed my record"** dashboard with dispute escalation tickets for Platform Admin review.
 
-6. **Offline First-Responder Signed Card**:
-   - Exportable offline emergency card signed by Medistry with ES256 (ECDSA P-256). Scanners verify it with the public key from `/.well-known/medistry-keys.json`, which cannot be used to forge cards.
+6. **Offline Emergency Card (signed by Medistry)**:
+   - A printable card whose QR code is signed by **Medistry** with ES256 (ECDSA P-256). Medistry is not a government or health authority, and the card does not claim to be issued by one.
+   - Clinicians verify it offline at `/s` with Medistry's public keys (`/.well-known/medistry-keys.json`), which cannot be used to forge cards. The QR is signed, not encrypted: patients choose what goes on it. See "Offline emergency card" below.
 
 ---
 

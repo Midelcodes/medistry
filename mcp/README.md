@@ -137,6 +137,6 @@ under-triage (the safety-critical error) against nurse-assigned categories.
 - Adults, age 12 and up, only.
 - Facilities are synthetic; a real deployment needs a live national registry and bed feeds.
 - Queue tools have no authentication or audit log yet. Run the server only where access is already controlled.
-- Medistry's encounter history is placeholder data in this build, so it is deliberately not returned.
+- `get_emergency_summary` does not return encounter history (data minimisation), although Medistry's summary now lists the patient's signed encounters.
 - `get_emergency_summary` is a genuine break-glass: it notifies the patient and is logged. Do not call it casually in demos against shared data.
 - The public Medistry demo is hosted outside Nigeria; the data is synthetic. A real deployment needs an in-country region.

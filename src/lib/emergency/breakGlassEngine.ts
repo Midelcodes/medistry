@@ -11,6 +11,7 @@ import { ClinicalTimelineEngine } from '../clinical/timeline.ts';
 import { AuditChainManager } from '../audit/hashChain.ts';
 import { NotificationDispatcher, type DispatchedAlertResult } from '../notifications/dispatcher.ts';
 import type { ActorContext, EmergencyGrantContext } from '../policy/enforcer.ts';
+import { recentEncounters as signedRecentEncounters } from '../clinical/encounters.ts';
 
 export type BreakGlassReason = 'UNCONSCIOUS' | 'LIFE_THREATENING' | 'PATIENT_UNABLE_TO_CONSENT' | 'OTHER';
 
@@ -31,8 +32,8 @@ export interface EmergencySummaryData {
   chronicCare: {
     chronicConditions: string[];
     activeMedications: Array<{ medicationName: string; dose: string; route: string; sinceDate: string }>;
-    implantsOrDevices?: string[];
-    pregnancyStatus?: string;
+    implantsOrDevices?: string[]; // only when recorded; never assumed
+    pregnancyStatus?: string;     // only when recorded; never assumed
   };
   recentEncounters: Array<{
     date: string;
@@ -236,25 +237,8 @@ export class EmergencyBreakGlassEngine {
       .filter((a) => a.category === 'drug')
       .map((a) => ({ substance: a.substance, reaction: a.reaction, severity: a.severity }));
 
-    // Mock last 5 encounters
-    const recentEncounters = [
-      {
-        date: '2026-09-14',
-        facilityName: 'Lagos University Teaching Hospital',
-        doctorName: 'Dr. Robert Caldwell',
-        diagnosis: 'Vaso-occlusive pain crisis',
-        treatment: 'IV Hydration & Analgesia protocol',
-        result: 'Stabilized and discharged',
-      },
-      {
-        date: '2026-05-22',
-        facilityName: 'National Hospital Abuja',
-        doctorName: 'Dr. Marcus Thorne',
-        diagnosis: 'Acute bacterial bronchitis',
-        treatment: 'Azithromycin 500mg 3-day course',
-        result: 'Resolved',
-      },
-    ];
+    // The patient's 5 most recent doctor-signed encounters, newest first (empty if none). Same source as the card.
+    const recentEncounters = signedRecentEncounters(this.clinicalStore, patient.id, 5);
 
     return {
       patient: {
@@ -277,8 +261,9 @@ export class EmergencyBreakGlassEngine {
       chronicCare: {
         chronicConditions: patient.chronicConditions,
         activeMedications: patient.activeMedications,
-        implantsOrDevices: ['None on record'],
-        pregnancyStatus: demo.gender === 'female' ? 'Non-pregnant (Self-reported)' : undefined,
+        // Not stored anywhere in this build, so not reported (previously these were filled with assumed values).
+        implantsOrDevices: undefined,
+        pregnancyStatus: undefined,
       },
       recentEncounters,
       legalDirectives: {

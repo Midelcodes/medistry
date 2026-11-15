@@ -46,12 +46,24 @@ export interface SeedClinician {
   status: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
 }
 
+/** A synthetic past visit, written to the clinical store as a doctor-signed FHIR Encounter. */
+export interface SeedEncounter {
+  daysAgo: number;
+  facilityId: string;
+  classCode: 'EMER' | 'AMB' | 'IMP';
+  reason: string;
+  diagnosis: string;
+  treatment: string;
+  result: string;
+}
+
 export interface SeedDatabasePayload {
   facilities: SeedFacility[];
   clinicians: SeedClinician[];
   patients: Array<{
     patient: PatientEntity;
     emergencyCode: { rawCode: string; formattedCode: string; scanUrl: string };
+    encounters: SeedEncounter[]; // synthetic; seeded into the clinical store by src/lib/site/seedClinical.ts
   }>;
 }
 
@@ -222,6 +234,10 @@ export function generateSeedData(): SeedDatabasePayload {
       },
       // Offline card opt-ins (synthetic): the condition and one medication, no recent diagnosis
       card: { conditions: ['Sickle Cell Anemia (HbSS)'], medicationNames: ['Hydroxyurea'], includeRecentDiagnosis: false },
+      encounters: [
+        { daysAgo: 45, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Severe bone pain in limbs and back', diagnosis: 'Vaso-occlusive crisis', treatment: 'IV fluids and analgesia', result: 'Discharged home after 3 days' },
+        { daysAgo: 210, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Routine haematology review', diagnosis: 'Sickle cell anaemia (HbSS), stable', treatment: 'Hydroxyurea continued', result: 'Follow-up in 6 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -246,6 +262,10 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 30, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Wheeze and breathlessness', diagnosis: 'Acute asthma exacerbation', treatment: 'Nebulised bronchodilator and oral steroid', result: 'Discharged home' },
+        { daysAgo: 180, facilityId: 'fac-luth-001', classCode: 'AMB', reason: 'Asthma review', diagnosis: 'Severe persistent asthma', treatment: 'Inhaler technique reviewed', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -269,6 +289,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: true,
       },
+      encounters: [
+        { daysAgo: 60, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Blood pressure check', diagnosis: 'Essential hypertension, controlled', treatment: 'Amlodipine continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
@@ -292,6 +315,10 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 20, facilityId: 'fac-abuja-001', classCode: 'EMER', reason: 'Sweating and confusion', diagnosis: 'Hypoglycaemia', treatment: 'Oral and IV glucose; glimepiride dose reviewed', result: 'Discharged home' },
+        { daysAgo: 150, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Diabetes review', diagnosis: 'Type 2 diabetes mellitus', treatment: 'Metformin continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
@@ -312,6 +339,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 90, facilityId: 'fac-kano-001', classCode: 'AMB', reason: 'Fever and headache', diagnosis: 'Uncomplicated malaria', treatment: 'Oral antimalarial', result: 'Recovered' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -334,6 +364,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 75, facilityId: 'fac-luth-001', classCode: 'AMB', reason: 'Kidney function review', diagnosis: 'Chronic kidney disease stage 2', treatment: 'Dietary advice; allopurinol continued', result: 'Follow-up in 6 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -356,6 +389,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: true,
       },
+      encounters: [
+        { daysAgo: 50, facilityId: 'fac-kano-001', classCode: 'EMER', reason: 'Witnessed seizure at home', diagnosis: 'Breakthrough seizure', treatment: 'Observation; levetiracetam adherence reviewed', result: 'Discharged home' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -378,6 +414,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 40, facilityId: 'fac-abuja-001', classCode: 'EMER', reason: 'Upper abdominal pain', diagnosis: 'Peptic ulcer disease flare', treatment: 'Proton pump inhibitor', result: 'Discharged home' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
@@ -408,6 +447,10 @@ export function generateSeedData(): SeedDatabasePayload {
         medicationNames: ['Furosemide', 'Digoxin'],
         includeRecentDiagnosis: true,
       },
+      encounters: [
+        { daysAgo: 25, facilityId: 'fac-kano-001', classCode: 'IMP', reason: 'Breathlessness and leg swelling', diagnosis: 'Acute decompensated heart failure', treatment: 'IV diuretics', result: 'Discharged after 5 days' },
+        { daysAgo: 120, facilityId: 'fac-kano-001', classCode: 'AMB', reason: 'Cardiology review', diagnosis: 'Atrial fibrillation, rate controlled', treatment: 'Digoxin continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -431,6 +474,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 15, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Fever', diagnosis: 'Febrile illness in sickle cell disease', treatment: 'Blood cultures and IV antibiotics', result: 'Admitted for observation' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
   ];
@@ -463,6 +509,7 @@ export function generateSeedData(): SeedDatabasePayload {
     return {
       patient: patientEntity,
       emergencyCode,
+      encounters: p.encounters as SeedEncounter[],
     };
   });
 

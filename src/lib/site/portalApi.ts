@@ -25,6 +25,7 @@ import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter 
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
 import { SUPPORTED_LOCALES } from '../i18n/translations.ts';
+import { latestDiagnosisForCard } from '../clinical/encounters.ts';
 import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import type { OfflineScanService } from '../emergency/offlineScans.ts';
@@ -223,12 +224,9 @@ export function createPortalApi(ctx: PortalContext) {
     };
   }
 
-  /** Most recent diagnosis for the card: the latest encounter's coded reason, read as the patient. */
+  /** Most recent diagnosis for the card: the newest signed encounter's diagnosis (same source as the emergency summary). */
   function latestDiagnosis(p: PatientEntity): CardDiagnosis | null {
-    const [latest] = ctx.timelineEngine.getTimeline(p.id, patientActor(p), { filters: { resourceType: 'Encounter' } });
-    const resource = latest?.resource as { reasonCode?: Array<{ text?: string }> } | undefined;
-    const t = resource?.reasonCode?.[0]?.text;
-    return t ? { t, d: latest.effectiveDate.slice(0, 10) } : null;
+    return latestDiagnosisForCard(ctx.clinicalStore, p.id);
   }
 
   /**

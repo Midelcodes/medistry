@@ -43,7 +43,10 @@ export interface FHIREncounter {
     individual: FHIRReference; // Clinician
   }>;
   period: FHIRPeriod;
-  reasonCode?: FHIRCodeableConcept[];
+  reasonCode?: FHIRCodeableConcept[];                 // why the patient came (not a diagnosis)
+  diagnosis?: Array<{ condition: FHIRReference; rank?: number }>; // FHIR R4 Encounter.diagnosis (display = diagnosis text)
+  hospitalization?: { dischargeDisposition?: FHIRCodeableConcept }; // FHIR R4: outcome of the visit
+  extension?: Array<{ url: string; valueString?: string }>;         // e.g. treatment summary (see clinical/encounters.ts)
   serviceProvider: FHIRReference; // Facility
 }
 

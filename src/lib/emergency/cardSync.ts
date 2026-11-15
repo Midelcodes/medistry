@@ -16,6 +16,7 @@ import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
 import type { FinalRecordEvent, RecordSource } from '../clinical/store.ts';
 import { t, SUPPORTED_LOCALES, type SupportedLocale } from '../i18n/translations.ts';
+import { encounterDiagnosis } from '../clinical/encounters.ts';
 
 export const RECORD_CHANGED_MESSAGE = t('notify_record_changed', 'en');
 
@@ -137,7 +138,7 @@ export class CardContentSync {
       }
       case 'Encounter':
         // A new signed encounter can change "most recent diagnosis", which is on the card only if opted in.
-        encounterChange = !event.previous && patient.cardIncludeRecentDiagnosis && !!r.reasonCode?.[0]?.text;
+        encounterChange = patient.cardIncludeRecentDiagnosis && !!encounterDiagnosis(r);
         break;
       default:
         return none;

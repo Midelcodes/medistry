@@ -66,7 +66,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
           <td><span class="enc-date">${escapeHtml(e.date)}</span></td>
           <td>
             <strong>${escapeHtml(e.diagnosis)}</strong>
-            <div class="enc-sub">${escapeHtml(e.facilityName)} • Dr. ${escapeHtml(e.doctorName)}</div>
+            <div class="enc-sub">${escapeHtml(e.facilityName)} • ${escapeHtml(e.doctorName)}</div>
           </td>
           <td>
             <div>${escapeHtml(e.treatment)}</div>
@@ -74,7 +74,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
           </td>
         </tr>
       `).join('')
-    : '<tr><td colspan="3" class="text-muted">No recent clinical encounters recorded.</td></tr>';
+    : '<tr><td colspan="3" class="text-muted">No encounters on record</td></tr>';
 
   const emergencyContactsHtml = patient.emergencyContacts.map(c => `
     <div class="contact-card">
@@ -338,7 +338,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
       </div>
       <div class="triage-stat-card">
         <div class="stat-label">Pregnancy Status</div>
-        <div class="stat-value" style="font-size:16px; margin-top:8px;">${escapeHtml(chronicCare.pregnancyStatus || 'N/A')}</div>
+        <div class="stat-value" style="font-size:16px; margin-top:8px;">${escapeHtml(chronicCare.pregnancyStatus || 'Not recorded')}</div>
       </div>
     </section>
 
@@ -396,7 +396,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
 
       <div>
         <h4 style="font-size:13px; color:var(--text-muted); margin-bottom:4px;">Implants / Medical Devices:</h4>
-        <div class="text-muted">${chronicCare.implantsOrDevices?.join(', ') || 'None reported'}</div>
+        <div class="text-muted">${escapeHtml(chronicCare.implantsOrDevices?.join(', ') || 'Not recorded')}</div>
       </div>
     </section>
 
