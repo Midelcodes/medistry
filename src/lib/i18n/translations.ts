@@ -23,6 +23,44 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     full_history_locked: 'Full history is locked. Requires second clinician co-sign.',
     full_history_unlocked: 'Full Clinical History Unlocked via Dual Co-Sign',
     offline_verified: 'OFFLINE VERIFIED',
+    // Offline card scanner (/s)
+    scan_title: 'Emergency card scanner',
+    scan_intro: 'Scan a Medistry emergency card. The signature is checked on this device and nothing is sent to a server.',
+    scan_start_camera: 'Scan with camera',
+    scan_stop_camera: 'Stop camera',
+    scan_paste_label: 'Or paste the card link or code',
+    scan_verify: 'Verify',
+    scan_again: 'Scan another card',
+    scan_online: 'Online',
+    scan_offline: 'Offline',
+    scan_camera_unavailable: 'Camera not available. Paste the card link instead.',
+    scan_camera_denied: 'Camera permission was refused. Paste the card link instead.',
+    scan_aim: 'Point the camera at the QR code on the front of the card.',
+    scan_checking: 'Checking signature…',
+    scan_no_token: 'That is not a Medistry card code.',
+    scan_valid_badge: 'GENUINE CARD',
+    scan_not_genuine: 'CARD NOT GENUINE: do not rely on this data',
+    scan_not_genuine_detail: 'The signature does not match. The card was altered or not issued by Medistry.',
+    scan_expired: 'Card expired on {date}',
+    scan_unverified_current: 'UNVERIFIED-CURRENT: genuine when issued, but may be out of date',
+    scan_unknown_key: 'Cannot verify: connect once to update keys',
+    scan_future: 'Cannot verify: check this device\'s date and time',
+    scan_unsupported: 'Cannot read this card format. Connect once to update the scanner.',
+    scan_blood_group: 'Blood group',
+    scan_genotype: 'Genotype',
+    scan_severe_allergies: 'Severe allergies',
+    scan_no_allergies: 'No severe allergies recorded on this card',
+    scan_dnr: 'DO NOT RESUSCITATE (DNR) ON FILE',
+    scan_conditions: 'Conditions',
+    scan_medications: 'Medicines',
+    scan_recent_dx: 'Most recent diagnosis',
+    scan_contact: 'Emergency contact',
+    scan_call: 'Call {name}',
+    scan_organ_donor: 'Registered organ donor',
+    scan_footer_verified: 'Card v{cv}, issued {date}, verified offline',
+    scan_footer_unverified: 'Card v{cv}, issued {date}. Signature genuine, card expired',
+    scan_valid_until: 'Valid until {date}',
+    scan_unknown: 'unknown',
   },
   ha: { // Hausa (Northern Nigeria & West Africa)
     emergency_title: 'TAƘAITACCEN BAYANIN GAGGAWA NA LAFIYA',
@@ -83,6 +121,44 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     full_history_locked: 'Rekodi kamili imefungwa. Inahitaji idhini ya daktari wa pili.',
     full_history_unlocked: 'Rekodi kamili ya kliniki imefunguliwa kwa idhini ya madaktari wawili',
     offline_verified: 'IMETHIBITISHWA BILA MTANDAO',
+    // Offline card scanner (/s). Needs native-speaker review before clinical use.
+    scan_title: 'Kisomaji cha kadi ya dharura',
+    scan_intro: 'Changanua kadi ya dharura ya Medistry. Sahihi inakaguliwa kwenye kifaa hiki na hakuna kinachotumwa kwa seva.',
+    scan_start_camera: 'Changanua kwa kamera',
+    scan_stop_camera: 'Zima kamera',
+    scan_paste_label: 'Au bandika kiungo au msimbo wa kadi',
+    scan_verify: 'Thibitisha',
+    scan_again: 'Changanua kadi nyingine',
+    scan_online: 'Mtandaoni',
+    scan_offline: 'Nje ya mtandao',
+    scan_camera_unavailable: 'Kamera haipatikani. Bandika kiungo cha kadi badala yake.',
+    scan_camera_denied: 'Ruhusa ya kamera imekataliwa. Bandika kiungo cha kadi badala yake.',
+    scan_aim: 'Elekeza kamera kwenye msimbo wa QR ulio mbele ya kadi.',
+    scan_checking: 'Inakagua sahihi…',
+    scan_no_token: 'Huu si msimbo wa kadi ya Medistry.',
+    scan_valid_badge: 'KADI HALALI',
+    scan_not_genuine: 'KADI SI HALALI: usitegemee taarifa hizi',
+    scan_not_genuine_detail: 'Sahihi hailingani. Kadi imebadilishwa au haikutolewa na Medistry.',
+    scan_expired: 'Muda wa kadi uliisha tarehe {date}',
+    scan_unverified_current: 'HAIJATHIBITISHWA KUWA YA SASA: ilikuwa halali ilipotolewa, lakini huenda imepitwa na wakati',
+    scan_unknown_key: 'Haiwezi kuthibitisha: unganisha mtandao mara moja ili kusasisha funguo',
+    scan_future: 'Haiwezi kuthibitisha: kagua tarehe na saa ya kifaa hiki',
+    scan_unsupported: 'Haiwezi kusoma muundo huu wa kadi. Unganisha mtandao mara moja ili kusasisha kisomaji.',
+    scan_blood_group: 'Kundi la damu',
+    scan_genotype: 'Aina ya jeni (genotype)',
+    scan_severe_allergies: 'Mzio mkali',
+    scan_no_allergies: 'Hakuna mzio mkali ulioandikwa kwenye kadi hii',
+    scan_dnr: 'USIMFUFUE (DNR): AGIZO LIMEANDIKWA',
+    scan_conditions: 'Magonjwa',
+    scan_medications: 'Dawa',
+    scan_recent_dx: 'Utambuzi wa hivi karibuni',
+    scan_contact: 'Mtu wa kuwasiliana naye wakati wa dharura',
+    scan_call: 'Mpigie {name}',
+    scan_organ_donor: 'Mtoaji wa viungo aliyesajiliwa',
+    scan_footer_verified: 'Kadi toleo {cv}, ilitolewa {date}, imethibitishwa bila mtandao',
+    scan_footer_unverified: 'Kadi toleo {cv}, ilitolewa {date}. Sahihi ni halali, muda wa kadi umeisha',
+    scan_valid_until: 'Halali hadi {date}',
+    scan_unknown: 'haijulikani',
   },
   fr: { // French (West & Central Africa)
     emergency_title: "RÉSUMÉ MÉDICAL D'URGENCE",
@@ -104,6 +180,18 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
 /**
  * Translates a key for a given locale, with parameter interpolation and fallback to English.
  */
+/** Keys used by the offline card scanner page (/s), embedded in that page for offline use. */
+export const SCANNER_KEYS = Object.keys(TRANSLATIONS.en).filter((k) => k.startsWith('scan_'));
+
+/** Scanner strings for every locale (English fallback per key), for embedding in the /s page. */
+export function scannerStrings(): Record<SupportedLocale, Record<string, string>> {
+  const out = {} as Record<SupportedLocale, Record<string, string>>;
+  for (const locale of SUPPORTED_LOCALES) {
+    out[locale] = Object.fromEntries(SCANNER_KEYS.map((k) => [k, t(k, locale)]));
+  }
+  return out;
+}
+
 export function t(key: string, locale: SupportedLocale = 'en', params?: Record<string, string | number>): string {
   const dictionary = TRANSLATIONS[locale] || TRANSLATIONS.en;
   let text = dictionary[key] || TRANSLATIONS.en[key] || key;

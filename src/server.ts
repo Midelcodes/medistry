@@ -26,6 +26,7 @@ import { PatientAccessLogManager } from './lib/audit/accessLogManager.ts';
 import { decryptPatientDemographics, type PatientEntity } from './lib/patient/profile.ts';
 import { seedClinicalRecords } from './lib/site/seedClinical.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
+import { scannerStrings } from './lib/i18n/translations.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
 import { appBaseUrl, clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
 
@@ -97,7 +98,8 @@ const handlePortalApi = createPortalApi({
 });
 
 // Site pages: shared layout + one template per page
-const PAGES: Record<string, { file: string; nav: string; title: string; description: string; script?: string }> = {
+type PageDef = { file: string; nav: string; title: string; description: string; script?: string; module?: boolean };
+const PAGES: Record<string, PageDef> = {
   '/': { file: 'home', nav: 'home', title: 'Medistry | Portable Medical Records & Emergency Access', description: 'Medistry gives patients control of their FHIR-based medical records and lets verified clinicians reach life-saving information through an audited emergency break-glass scan.' },
   '/about': { file: 'about', nav: 'about', title: 'About | Medistry', description: 'Why Medistry exists, the principles behind it, and how it aligns with the Nigeria Data Protection Act 2023.' },
   '/features': { file: 'features', nav: 'features', title: 'Features | Medistry', description: 'Patient-controlled records, verified clinician access, emergency QR and NFC codes, encryption and a tamper-evident audit log.', script: 'features' },
@@ -112,7 +114,21 @@ const PAGES: Record<string, { file: string; nav: string; title: string; descript
 
 const NAV_KEYS = ['home', 'about', 'features', 'how', 'patients', 'clinicians', 'emergency', 'facilities', 'contact'];
 
-function renderPage(page: { file: string; nav: string; title: string; description: string; script?: string }, extra: Record<string, string> = {}): string | null {
+// Offline card scanner. Not in PAGES: it embeds the public keys and its strings, and may use the camera.
+const SCAN_PAGE: PageDef = {
+  file: 'scan', nav: 'emergency', title: 'Emergency Scan | Medistry',
+  description: 'Scan and verify a Medistry offline emergency card on this device, even without internet.',
+  script: 'scan', module: true,
+};
+
+/** JSON that is safe inside <script type="application/json"> (cannot close the tag or break the page). */
+function jsonForScriptTag(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+function renderPage(page: PageDef, extra: Record<string, string> = {}): string | null {
   try {
     let html = fs.readFileSync(path.join(SITE_DIR, 'layout.html'), 'utf-8');
     const content = fs.readFileSync(path.join(SITE_DIR, 'pages', `${page.file}.html`), 'utf-8');
@@ -120,7 +136,9 @@ function renderPage(page: { file: string; nav: string; title: string; descriptio
       .replace('{{content}}', () => content)
       .replace(/\{\{title\}\}/g, () => page.title.replace(/&/g, '&amp;'))
       .replace(/\{\{description\}\}/g, () => page.description.replace(/"/g, '&quot;'))
-      .replace('{{pageScript}}', () => (page.script ? `<script src="/js/${page.script}.js" defer></script>` : ''));
+      .replace('{{pageScript}}', () => (page.script
+        ? (page.module ? `<script type="module" src="/js/${page.script}.js"></script>` : `<script src="/js/${page.script}.js" defer></script>`)
+        : ''));
     for (const key of NAV_KEYS) {
       html = html.replace(new RegExp(`\\{\\{active_${key}\\}\\}`, 'g'), page.nav === key ? 'active' : '');
     }
@@ -137,6 +155,7 @@ const STATIC_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -223,11 +242,41 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // Static assets (css, js, svg) from /site, with path traversal protection
-    if (method === 'GET' && /^\/(css|js|assets)\/[A-Za-z0-9._-]+$/.test(pathname)) {
+    // Static assets from /site: one optional subfolder (e.g. /js/lib/), no dot-segments, known types only
+    if (method === 'GET' && /^\/(css|js|assets|vendor)\/(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(pathname)) {
       const ext = path.extname(pathname);
-      if (STATIC_TYPES[ext]) {
-        serveStaticFile(res, path.join(SITE_DIR, pathname), STATIC_TYPES[ext]);
+      const filePath = path.resolve(SITE_DIR, `.${pathname}`);
+      if (STATIC_TYPES[ext] && filePath.startsWith(SITE_DIR + path.sep)) {
+        serveStaticFile(res, filePath, STATIC_TYPES[ext]);
+        return;
+      }
+    }
+
+    // Scanner service worker (served from the root so it may control /s)
+    if (method === 'GET' && pathname === '/sw.js') {
+      fs.readFile(path.join(SITE_DIR, 'sw.js'), (err, content) => {
+        if (err) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', ...getSecurityHttpHeaders() });
+        res.end(content);
+      });
+      return;
+    }
+
+    // Offline card scanner: embeds the current public keys and its strings so it works offline after one visit.
+    // The card token stays in the URL fragment and is never sent here.
+    if (method === 'GET' && (pathname === '/s' || pathname === '/s/')) {
+      const html = renderPage(SCAN_PAGE, {
+        jwksJson: jsonForScriptTag({ keys: getPublicJwks(), generatedAt: Date.now() }),
+        scanI18nJson: jsonForScriptTag(scannerStrings()),
+      });
+      if (html) {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          ...getSecurityHttpHeaders(),
+          'Permissions-Policy': 'camera=(self), microphone=(), geolocation=(), payment=()',
+          'Cache-Control': 'no-cache',
+        });
+        res.end(html);
         return;
       }
     }
