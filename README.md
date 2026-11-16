@@ -14,6 +14,9 @@
 - **Sessions** last `SESSION_TIMEOUT_MINUTES` (default 15). The emergency summary needs the clinician's session and the grant must belong to that clinician.
 - Hosting is outside Nigeria for the public demo; the data is synthetic. A real deployment needs an in-country region.
 - Compliance wording describes design intent only and has had no legal review.
+- **Running with real data:** read [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) first: one deployment per country
+  (`DEPLOYMENT_COUNTRY`, `DEPLOYMENT_REGION`), clamd malware scanning (fail closed), key management and rotation,
+  daily encrypted backups with a tested restore, redacted JSON logs, and the LLM agent disabled for real data.
 
 ---
 

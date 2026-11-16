@@ -181,7 +181,7 @@ describe('3. Card API', () => {
   }
 
   before(async () => {
-    [demo, locked] = await Promise.all([start(DEMO_PORT, { DEMO_MODE: '1' }), start(LOCKED_PORT, { DEMO_MODE: '0' })]);
+    [demo, locked] = await Promise.all([start(DEMO_PORT, { DEMO_MODE: '1' }), start(LOCKED_PORT, { DEMO_MODE: '0', DEPLOYMENT_COUNTRY: 'NG', DEPLOYMENT_REGION: 'test-region' })]);
   });
   after(() => { demo?.kill(); locked?.kill(); });
 

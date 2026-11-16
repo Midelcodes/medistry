@@ -130,7 +130,7 @@ export function renderPrintableOfflineCard(card: PrintableCardInput, locale: Sup
   * { box-sizing: border-box; }
   body { margin: 0; padding: 16px; background: #f1f5f9; color: #0f172a; font-family: Arial, Helvetica, sans-serif; }
   header.toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-  .print-btn { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 6px; background: #0f172a; color: #ffffff; font-weight: 700; font-size: 15px; cursor: pointer; }
+  .print-hint { margin: 0; min-height: 44px; display: flex; align-items: center; font-size: 15px; font-weight: 600; color: #0f172a; }
   main { display: flex; flex-direction: column; gap: 12px; }
   .card { width: 85.6mm; height: 54mm; background: #ffffff; border: 0.4mm solid #0f172a; border-radius: 3mm; overflow: hidden; position: relative; }
   .front { display: flex; align-items: center; gap: 2.5mm; padding: 3mm; }
@@ -163,7 +163,7 @@ export function renderPrintableOfflineCard(card: PrintableCardInput, locale: Sup
 </head>
 <body>
 <header class="toolbar">
-  <button type="button" class="print-btn" onclick="window.print()" aria-label="${L('card_print_aria')}">${L('card_print')}</button>
+  <p class="print-hint">${L('card_print')}: ${L('card_print_hint')}</p>
 </header>
 <main>
   <section class="card front" aria-label="${L('card_front_aria')}">

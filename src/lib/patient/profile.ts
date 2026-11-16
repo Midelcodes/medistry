@@ -4,17 +4,11 @@
  */
 
 import crypto from 'node:crypto';
-import { appSecret, deploymentCountry } from '../security/config.ts';
+import { deploymentCountry } from '../security/config.ts';
+import { keyProvider, type KeyProvider } from '../crypto/keyProvider.ts';
 
-// Key comes from FIELD_ENCRYPTION_KEY (64 hex chars). If unset or a published default, a random per-process key is used.
-function getEncryptionKey(): Buffer {
-  const envKey = appSecret('FIELD_ENCRYPTION_KEY', { hex: true });
-  const keyBuf = Buffer.from(envKey, 'hex');
-  if (keyBuf.length !== 32) {
-    throw new Error('FIELD_ENCRYPTION_KEY must be a 32-byte hexadecimal string (64 chars)');
-  }
-  return keyBuf;
-}
+// Keys come from the KeyProvider (crypto/keyProvider.ts): FIELD_ENCRYPTION_KEY (64 hex chars) is the current
+// version; earlier versions stay readable for rotation. If unset or a published default, a random per-process key.
 
 export interface EncryptedCiphertext {
   iv: string;         // 12 bytes hex
@@ -22,11 +16,17 @@ export interface EncryptedCiphertext {
   ciphertext: string; // Hex payload
 }
 
+/** Key version of a ciphertext: "v<n>:" prefix, or 1 for ciphertexts written before versioning. */
+export function fieldKeyVersionOf(encryptedPayload: string): number {
+  const m = /^v(\d{1,4}):/.exec(encryptedPayload);
+  return m ? Number(m[1]) : 1;
+}
+
 /**
- * Encrypts a plaintext string using AES-256-GCM with authenticated tag.
+ * Encrypts a plaintext string using AES-256-GCM with authenticated tag, under the current key version.
  */
-export function encryptField(plaintext: string): string {
-  const key = getEncryptionKey();
+export function encryptField(plaintext: string, provider: KeyProvider = keyProvider()): string {
+  const { version, key } = provider.getFieldEncryptionKey();
   const iv = crypto.randomBytes(12); // Recommended 96-bit IV for GCM
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
 
@@ -34,21 +34,22 @@ export function encryptField(plaintext: string): string {
   encrypted += cipher.final('hex');
   const tag = cipher.getAuthTag().toString('hex');
 
-  // Format: iv:tag:ciphertext
-  return `${iv.toString('hex')}:${tag}:${encrypted}`;
+  // Format: v<version>:iv:tag:ciphertext
+  return `v${version}:${iv.toString('hex')}:${tag}:${encrypted}`;
 }
 
 /**
  * Decrypts an AES-256-GCM ciphertext payload and validates integrity tag.
  */
-export function decryptField(encryptedPayload: string): string {
-  const parts = encryptedPayload.split(':');
+export function decryptField(encryptedPayload: string, provider: KeyProvider = keyProvider()): string {
+  const version = fieldKeyVersionOf(encryptedPayload);
+  const parts = encryptedPayload.replace(/^v\d{1,4}:/, '').split(':');
   if (parts.length !== 3) {
-    throw new Error('Invalid encrypted payload format: expected iv:tag:ciphertext');
+    throw new Error('Invalid encrypted payload format: expected [v<n>:]iv:tag:ciphertext');
   }
 
   const [ivHex, tagHex, ciphertextHex] = parts;
-  const key = getEncryptionKey();
+  const { key } = provider.getFieldEncryptionKey(version);
   const iv = Buffer.from(ivHex, 'hex');
   const tag = Buffer.from(tagHex, 'hex');
 
@@ -59,6 +60,12 @@ export function decryptField(encryptedPayload: string): string {
   decrypted += decipher.final('utf8');
 
   return decrypted;
+}
+
+/** Re-encrypts a ciphertext under the current key version (unchanged if it already uses it). For key rotation. */
+export function reencryptField(encryptedPayload: string, provider: KeyProvider = keyProvider()): string {
+  if (fieldKeyVersionOf(encryptedPayload) === provider.getFieldEncryptionKey().version && /^v\d/.test(encryptedPayload)) return encryptedPayload;
+  return encryptField(decryptField(encryptedPayload, provider), provider);
 }
 
 export type BloodGroup = 'A_POSITIVE' | 'A_NEGATIVE' | 'B_POSITIVE' | 'B_NEGATIVE' | 'AB_POSITIVE' | 'AB_NEGATIVE' | 'O_POSITIVE' | 'O_NEGATIVE' | 'UNKNOWN';

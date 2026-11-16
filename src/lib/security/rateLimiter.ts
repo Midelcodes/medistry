@@ -184,7 +184,10 @@ export function escapeHtml(str: string): string {
  */
 export function getSecurityHttpHeaders(): Record<string, string> {
   return {
-    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
+    // Scripts only from this origin (no inline script or handlers). The offline scanner needs: its own module
+    // scripts, the service worker (worker-src 'self'), the camera (Permissions-Policy camera=(self), on /s only)
+    // and data: images (QR codes). Inline style attributes remain ('unsafe-inline' for styles); fonts from Google.
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';",
     'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',

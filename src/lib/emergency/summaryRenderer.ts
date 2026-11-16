@@ -433,9 +433,9 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
              <p style="font-size:13px; color:var(--text-muted); margin-top:4px;">
                To view comprehensive multi-year clinical encounters, laboratory observations, and diagnostic reports, a verified attending second clinician must co-sign.
              </p>
-             <button type="button" class="btn btn-cosign" onclick="alert('Co-signing requires second clinician credentials on this terminal.')">
-               ✍️ Request Second Clinician Co-Sign for Full History
-             </button>
+             <a class="btn btn-cosign" href="/clinicians">
+               ✍️ Request Second Clinician Co-Sign for Full History (second clinician signs in on the clinician console)
+             </a>
            </div>`
       }
     </section>

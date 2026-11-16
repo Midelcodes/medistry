@@ -111,7 +111,20 @@ export async function runAgent({ llm, mcp, task, system = SYSTEM_PROMPT, maxIter
   return { text: null, iterations: maxIterations, steps, stoppedReason: "max_iterations" };
 }
 
+/**
+ * Real data (DEMO_MODE=0) must not go to an LLM outside the deployment country (docs/DEPLOYMENT.md). The agent
+ * refuses unless LLM_IN_COUNTRY_APPROVED=1 records that the model endpoint is in-country and approved.
+ */
+export function llmAllowed(env = process.env) {
+  return env.DEMO_MODE !== "0" || env.LLM_IN_COUNTRY_APPROVED === "1";
+}
+
 async function main() {
+  if (!llmAllowed()) {
+    console.error("Refusing to run: DEMO_MODE=0 means real data, and the LLM path is disabled for real data unless the model "
+      + "runs in-country and is approved (set LLM_IN_COUNTRY_APPROVED=1 only then). See docs/DEPLOYMENT.md.");
+    process.exit(1);
+  }
   const missing = ["GEMINI_API_KEY", "GEMINI_MODEL"].filter((k) => !process.env[k]?.trim());
   if (missing.length) {
     console.error(`Missing environment variable(s): ${missing.join(", ")}.\n`

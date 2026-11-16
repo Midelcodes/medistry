@@ -15,6 +15,7 @@ import { PrismaClient } from '@prisma/client';
 import { computeAuditEntryHash, GENESIS_HASH, type AuditRecordPayload, type ChainedAuditEntry } from '../../audit/hashChain.ts';
 import type { Persistence, Snapshot } from '../repositories.ts';
 import * as M from './mappers.ts';
+import { log } from '../../ops/logger.ts';
 
 const TX_OPTIONS = { maxWait: 20_000, timeout: 20_000 };
 
@@ -35,8 +36,8 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
     pending++;
     tail = tail.then(op).then(() => undefined, (err: any) => {
       failed++;
-      // Entity and error code only: never log values (they may be personal data).
-      console.error(`[storage] write failed: ${label}${err?.code ? ` (${err.code})` : ''}: ${String(err?.message || err).split('\n').filter(Boolean).pop()?.slice(0, 160) || 'error'}`);
+      // Entity and error code only: never log values (they may be personal data). Redacted by the logger as well.
+      log('error', 'storage_write_failed', { entity: label, code: err?.code, error: String(err?.message || err).split('\n').filter(Boolean).pop()?.slice(0, 160) || 'error' });
     }).finally(() => { pending--; });
   };
 

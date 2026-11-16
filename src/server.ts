@@ -21,26 +21,45 @@ import { createPersistence } from './lib/data/storage.ts';
 import { createRuntime } from './lib/runtime.ts';
 import { scannerStrings } from './lib/i18n/translations.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
-import { appBaseUrl, clientIp as getClientIp, DEMO_MODE, deploymentCountry } from './lib/security/config.ts';
+import { appBaseUrl, assertDeploymentConfig, clientIp as getClientIp, DEMO_MODE, deploymentCountry, deploymentRegion } from './lib/security/config.ts';
 import { registryFor } from './lib/clinician/verification.ts';
+import { keyProvider } from './lib/crypto/keyProvider.ts';
+import { ClamdVirusScannerAdapter, createVirusScanner } from './lib/clinical/virusScanners.ts';
+import { log, requestIdFrom } from './lib/ops/logger.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
+const STARTED_AT = Date.now();
+const VERSION: string = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf-8')).version || 'unknown'; } catch { return 'unknown'; }
+})();
+
 // 1. Storage and engines. Memory by default; STORAGE=postgres + DATABASE_URL writes through to PostgreSQL and
 // rebuilds the working set from it at start-up (see src/lib/data/repositories.ts).
-console.log('📦 Initializing MEDISTRY Clinical Store and Cryptographic Engines...');
-// Loads the offline card signing key at startup, so a missing production key fails closed immediately.
-const offlineCardManager = new OfflineEmergencyCardManager();
 const startupFailed = (err: any): never => {
   // One clear line (no stack dump of the database client, no connection strings).
   console.error(`Startup failed: ${String(err?.message || err).split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean).pop()}`);
   process.exit(1);
 };
+// Real data must run in an explicitly configured, in-country deployment.
+try { assertDeploymentConfig(); } catch (err) { startupFailed(err); }
+// Keys load at startup, so a missing production key (or an unimplemented KMS provider) fails closed immediately.
+let offlineCardManager: OfflineEmergencyCardManager;
+try {
+  keyProvider().getFieldEncryptionKey();
+  keyProvider().getCardKid();
+  offlineCardManager = new OfflineEmergencyCardManager();
+} catch (err) { startupFailed(err); }
+const scanner = createVirusScanner();
 const persistence = await createPersistence().catch(startupFailed);
 const runtime = await createRuntime(persistence).catch(startupFailed);
-console.log(`💾 Storage: ${persistence.mode}`);
+// Where this instance runs and what it uses. No secrets, no personal data.
+log('info', 'startup', {
+  version: VERSION, demoMode: DEMO_MODE, country: deploymentCountry(), region: deploymentRegion() || 'not set',
+  storage: persistence.mode, keyProvider: keyProvider().kind, malwareScanner: scanner.name, smsProvider: (process.env.SMS_PROVIDER || 'console').trim(),
+});
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
   accounts, patientAuth, staff, proxies, deliveries, ussd } = runtime;
@@ -78,7 +97,7 @@ const handlePortalApi = createPortalApi({
 // birthday (also enforced on every request). Runs once at start-up.
 const housekeeping = () => {
   proxies.enforceExpiry();
-  staff.sendLicenceReminders().catch((err) => console.error(`[housekeeping] licence reminders failed: ${err?.message || err}`));
+  staff.sendLicenceReminders().catch((err) => log('error', 'licence_reminders_failed', { error: String(err?.message || err) }));
 };
 housekeeping();
 setInterval(housekeeping, 24 * 60 * 60 * 1000).unref();
@@ -204,11 +223,27 @@ function serveStaticFile(res: http.ServerResponse, filePath: string, contentType
   });
 }
 
+// clamd status for /api/health, cached so health checks do not hammer clamd.
+let clamdStatus = { checkedAt: 0, up: false };
+async function scannerHealth(): Promise<{ name: string; status: 'up' | 'down' | 'not-antivirus' }> {
+  if (!(scanner instanceof ClamdVirusScannerAdapter)) return { name: scanner.name, status: 'not-antivirus' };
+  if (Date.now() - clamdStatus.checkedAt > 30_000) clamdStatus = { checkedAt: Date.now(), up: await scanner.ping() };
+  return { name: scanner.name, status: clamdStatus.up ? 'up' : 'down' };
+}
+
 const server = http.createServer(async (req, res) => {
   const ip = getClientIp(req);
   const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = urlObj.pathname;
   const method = req.method || 'GET';
+  // Request id: the caller's X-Request-Id if well formed, else a new one; echoed back and in every log line.
+  const requestId = requestIdFrom(req.headers['x-request-id']);
+  res.setHeader('X-Request-Id', requestId);
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    // Path only (no query string); redaction removes emergency codes and tokens from it.
+    log(res.statusCode >= 500 ? 'error' : 'info', 'http_request', { requestId, method, path: pathname, status: res.statusCode, durationMs: Date.now() - startedAt });
+  });
 
   // 1. Rate Limiting Check
   const rateLimitStatus = rateLimiter.check(ip);
@@ -297,8 +332,17 @@ const server = http.createServer(async (req, res) => {
 
     // Health Check
     if (method === 'GET' && pathname === '/api/health') {
+      // Operational status only: no personal or health data.
+      const storage = persistence.stats();
+      const malwareScanner = await scannerHealth();
+      const degraded = storage.failedWrites > 0 || malwareScanner.status === 'down';
       sendJson(res, 200, {
-        status: 'HEALTHY',
+        status: degraded ? 'DEGRADED' : 'HEALTHY',
+        version: VERSION,
+        uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
+        demoMode: DEMO_MODE,
+        region: deploymentRegion() || 'not set',
+        malwareScanner,
         platform: 'MEDISTRY Regional Health Record Portability Platform',
         countryCode: deploymentCountry(),
         regulator: (() => { try { return registryFor(deploymentCountry()).regulatorName; } catch { return 'Not configured for this country'; } })(),
@@ -307,7 +351,7 @@ const server = http.createServer(async (req, res) => {
         activePatients: seedData.patients.length,
         accreditedFacilities: seedData.facilities.length,
         verifiedClinicians: seedData.clinicians.length,
-        storage: persistence.stats(),
+        storage: { ...storage, status: storage.failedWrites > 0 ? 'degraded' : 'ok' },
       });
       return;
     }
@@ -478,8 +522,8 @@ const server = http.createServer(async (req, res) => {
     }
     sendJson(res, 404, { error: 'Route not found', path: pathname });
   } catch (err: any) {
-    console.error('Unhandled Server Error:', err);
-    sendJson(res, 500, { error: 'Internal Server Error', message: err.message });
+    log('error', 'unhandled_error', { requestId, path: pathname, error: String(err?.message || err).slice(0, 300) });
+    sendJson(res, 500, { error: 'Internal Server Error', requestId });
   }
 });
 
@@ -492,6 +536,9 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
+  log('info', 'listening', { port: PORT });
+  // The banner (with a demo emergency link) is for the synthetic demo only: never print a real patient's code.
+  if (!DEMO_MODE) return;
   console.log(`\n======================================================`);
   console.log(`🛡️  MEDISTRY FULL-STACK PLATFORM RUNNING LOCALLY`);
   console.log(`🌐  Local URL:        http://localhost:${PORT}`);

@@ -10,8 +10,14 @@ import crypto from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { hashPassword, generateTotp, generateTotpSecret, toRfc4648Base32, fromRfc4648Base32 } from '../src/lib/auth/security.ts';
 
+import { startMockClamd } from './mockClamd.ts';
+
 process.env.DEMO_MODE = '0';
-process.env.TRUST_PROXY = '1'; // each group sends its own X-Forwarded-For, so per-IP limits do not collide
+process.env.TRUST_PROXY = '1';
+// Real-data mode scans uploads with clamd and fails closed (Phase 14), so these tests run a stand-in clamd.
+const clamd = await startMockClamd();
+process.env.CLAMD_HOST = '127.0.0.1';
+process.env.CLAMD_PORT = String(clamd.port); // each group sends its own X-Forwarded-For, so per-IP limits do not collide
 const adminTotpBytes = crypto.randomBytes(20);
 process.env.PLATFORM_ADMIN_EMAIL = 'platform-admin@example.org';
 process.env.PLATFORM_ADMIN_PASSWORD_HASH = await hashPassword('synthetic-admin-password');
@@ -90,7 +96,7 @@ before(async () => {
   facilityAdminUri = fa.body.totpEnrolment.otpauthUri;
   facilityAdminId = fa.body.adminId;
 });
-after(() => { server.close(); });
+after(async () => { server.close(); await clamd.close(); });
 
 describe('Patient sign-in by SMS one-time code', () => {
   test('Success: the code sent by SMS signs the patient in to their own record', async () => {

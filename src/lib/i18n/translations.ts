@@ -95,6 +95,8 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     card_title: 'EMERGENCY MEDICAL CARD',
     card_instruct: 'Clinicians: scan with Medistry. Works offline.',
     card_print: 'Print card',
+    // No script on the card page (CSP script-src 'self', no inline handlers): printing uses the browser.
+    card_print_hint: "To print, use your browser's Print command (Ctrl+P, or Share then Print on a phone).",
     card_print_aria: 'Print emergency card, front and back',
     card_front_aria: 'Card front',
     card_back_aria: 'Card back',
@@ -254,6 +256,7 @@ export const TRANSLATIONS: Record<SupportedLocale, Record<string, string>> = {
     card_title: 'KADI YA MATIBABU YA DHARURA',
     card_instruct: 'Wahudumu wa afya: changanua kwa Medistry. Inafanya kazi bila mtandao.',
     card_print: 'Chapisha kadi',
+    card_print_hint: 'Ili kuchapisha, tumia amri ya Chapisha ya kivinjari (Ctrl+P, au Shiriki kisha Chapisha kwenye simu).',
     card_print_aria: 'Chapisha kadi ya dharura, mbele na nyuma',
     card_front_aria: 'Mbele ya kadi',
     card_back_aria: 'Nyuma ya kadi',

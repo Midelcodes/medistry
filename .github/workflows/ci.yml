@@ -33,6 +33,16 @@ jobs:
         working-directory: mcp
         run: npm test
 
+      # Dependency audit: reported as a warning for now (does not fail the build).
+      - name: Audit (root, high and critical)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: Audit (mcp, high and critical)
+        continue-on-error: true
+        working-directory: mcp
+        run: npm audit --audit-level=high
+
   # Same root suite with STORAGE=postgres against a real PostgreSQL. Tests that start their own server pin it to
   # memory storage (they need a fresh demo state each); tests/postgres-storage.test.ts runs only here.
   postgres:
@@ -82,3 +92,22 @@ jobs:
 
       - name: Test (root, STORAGE=postgres)
         run: npm test
+
+      # Backup and restore drill (docs/DEPLOYMENT.md): encrypted dump with a throwaway GPG key, restore into a second
+      # database, then check row counts and that the restored audit chain verifies.
+      - name: Backup and restore drill
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client gnupg >/dev/null
+          export GNUPGHOME="$(mktemp -d)"
+          gpg --batch --passphrase '' --quick-generate-key "Medistry CI backup <ci-backup@example.org>" default default never
+          export BACKUP_GPG_RECIPIENT=ci-backup@example.org BACKUP_DIR="$(mktemp -d)"
+          npm run seed
+          bash scripts/backup.sh
+          DUMP=$(ls "$BACKUP_DIR"/medistry-*.dump.gpg | head -1)
+          psql "postgresql://medistry:medistry_ci_only@localhost:5432/medistry" -c 'CREATE DATABASE medistry_restore'
+          RESTORE_URL="postgresql://medistry:medistry_ci_only@localhost:5432/medistry_restore?schema=public"
+          RESTORE_DATABASE_URL="$RESTORE_URL" bash scripts/restore.sh "$DUMP"
+          SRC=$(node --experimental-strip-types scripts/verify-restore.ts)
+          DST=$(DATABASE_URL="$RESTORE_URL" node --experimental-strip-types scripts/verify-restore.ts)
+          echo "source:   $SRC"; echo "restored: $DST"
+          test "$SRC" = "$DST"

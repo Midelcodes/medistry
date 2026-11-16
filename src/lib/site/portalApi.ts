@@ -29,6 +29,7 @@ import type { ProxyService, ProxyScope } from '../auth/proxies.ts';
 import { currentActing, runActing, type ProxyActing } from '../audit/actingContext.ts';
 import type { NotificationDeliveryStore } from '../notifications/deliveries.ts';
 import type { UssdService } from '../ussd/ussdService.ts';
+import { log } from '../ops/logger.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -447,8 +448,8 @@ export function createPortalApi(ctx: PortalContext) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'A valid email address is required');
       const entry = { id: crypto.randomUUID(), receivedAt: new Date().toISOString(), name, email, role, facility, message };
       contactMessages.push(entry);
-      // Always log (hosting platforms capture stdout); also try to keep a local file copy.
-      console.log(`CONTACT_MESSAGE ${JSON.stringify(entry)}`);
+      // Log the reference only (no name, email or message); the message itself goes to the local file below.
+      log('info', 'contact_message_received', { reference: entry.id.slice(0, 8).toUpperCase() });
       for (const dir of [ctx.dataDir, os.tmpdir()]) {
         try {
           fs.mkdirSync(dir, { recursive: true });

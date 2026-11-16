@@ -59,10 +59,10 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
 ### Threat 6: Cross-Site Scripting (XSS) in Uploaded Documents and Clinical Notes
 * **Attack**: A compromised clinician or malicious file uploader injects `<script>` tags, event handlers, or infected PDFs into clinical notes or DocumentReference files.
 * **Mitigations**:
-  1. **Antivirus Scanning**: Uploaded documents are inspected using an in-line EICAR and malware scanner before storage.
-  2. **File MIME & Size Enforcement**: Strict whitelist (`application/pdf`, `image/jpeg`, `image/png`) and 10 MB payload ceiling.
+  1. **Antivirus Scanning**: With real data (`DEMO_MODE=0`) every upload is scanned by ClamAV (clamd over TCP); if clamd is unreachable the upload is rejected (fail closed). Demo and tests use `TestPatternScannerAdapter`, which only matches the EICAR test string and is not antivirus.
+  2. **File Type & Size Enforcement**: Content checked by magic bytes (PDF, PNG, JPEG only; must match the declared type and extension), `UPLOAD_MAX_MB` ceiling (default 10), and image metadata (EXIF, XMP, IPTC, comments, PNG text chunks) removed before storage.
   3. **Clinical Free-Text Sanitizer (`sanitizeClinicalText`)**: Automatically strips script tags, iframe elements, event handlers (`onload`, `onerror`), and `javascript:` URLs.
-  4. **Strict Content-Security-Policy (CSP)**: `default-src 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'`.
+  4. **Strict Content-Security-Policy (CSP)**: `default-src 'self'; script-src 'self'` (no inline script or event handlers), `worker-src 'self'` for the scanner's service worker, `img-src 'self' data:`, `object-src 'none'; frame-ancestors 'none'; form-action 'self'`. Inline style attributes are still allowed (`style-src 'unsafe-inline'`). The camera is allowed only on the scanner page (`Permissions-Policy: camera=(self)` on `/s`).
 
 ### Threat 7: Session Hijack & Session Fixation
 * **Attack**: An attacker intercepts session cookies or steals active tokens.

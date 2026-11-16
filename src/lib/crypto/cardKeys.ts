@@ -4,11 +4,15 @@
  * - OFFLINE_CARD_PRIVATE_KEY: PKCS8 private key as PEM, base64 of the PEM, or base64 of the DER
  *   (`node scripts/gen-card-key.mjs` prints one).
  * - OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS: optional comma-separated SPKI public keys (same encodings)
- *   that are still published for verification after a key rotation.
+ *   that are still published for verification after a key rotation. Each may end in "@<date>"
+ *   (ISO 8601): the key leaves the JWKS after that date, i.e. once every card it signed has expired.
+ *   Without a date the key stays published.
+ * The module-level helpers below go through the KeyProvider (crypto/keyProvider.ts).
  * Missing or invalid key: a random per-process key in dev/demo (cards from a previous run stop
  * verifying), and a thrown error in production with DEMO_MODE=0 (fail closed), like appSecret().
  */
 import crypto, { type KeyObject } from 'node:crypto';
+import { keyProvider } from './keyProvider.ts';
 
 export interface CardJwk extends JsonWebKey {
   kid: string;
@@ -25,8 +29,8 @@ export interface CompactJwsVerification {
 export interface CardKeyStore {
   signCompactJws(payload: object): string;
   getPublicJwk(): CardJwk;
-  /** Current key first, then previous keys kept for rotation. */
-  getPublicJwks(): CardJwk[];
+  /** Current key first, then previous keys still within their keep-until date. */
+  getPublicJwks(nowSeconds?: number): CardJwk[];
   getKid(): string;
 }
 
@@ -77,11 +81,17 @@ function toCardJwk(publicKey: KeyObject): CardJwk {
   return { ...base, kid: jwkThumbprint(base), alg: 'ES256', use: 'sig' };
 }
 
+/** A previous public key and, optionally, the time (seconds) after which it is no longer published. */
+export type PreviousCardKey = KeyObject | { key: KeyObject; keepUntil?: number };
+
 /** Builds a key store from a private key (and optional previous public keys for rotation). */
-export function createCardKeyStore(privateKey: KeyObject, previousPublicKeys: KeyObject[] = []): CardKeyStore {
+export function createCardKeyStore(privateKey: KeyObject, previousPublicKeys: PreviousCardKey[] = []): CardKeyStore {
   assertP256(privateKey, 'Card signing key');
   const current = toCardJwk(crypto.createPublicKey(privateKey));
-  const previous = previousPublicKeys.map(toCardJwk).filter((k) => k.kid !== current.kid);
+  const previous = previousPublicKeys
+    .map((p) => ('key' in p && !(p as KeyObject).type ? p as { key: KeyObject; keepUntil?: number } : { key: p as KeyObject }))
+    .map((p) => ({ jwk: toCardJwk(p.key), keepUntil: p.keepUntil }))
+    .filter((p) => p.jwk.kid !== current.kid);
   return {
     signCompactJws(payload: object): string {
       const header = { alg: 'ES256', typ: 'JWT', kid: current.kid };
@@ -90,7 +100,10 @@ export function createCardKeyStore(privateKey: KeyObject, previousPublicKeys: Ke
       return `${input}.${b64url(signature)}`;
     },
     getPublicJwk: () => ({ ...current }),
-    getPublicJwks: () => [{ ...current }, ...previous.map((k) => ({ ...k }))],
+    getPublicJwks: (nowSeconds = Math.floor(Date.now() / 1000)) => [
+      { ...current },
+      ...previous.filter((p) => p.keepUntil === undefined || p.keepUntil > nowSeconds).map((p) => ({ ...p.jwk })),
+    ],
     getKid: () => current.kid,
   };
 }
@@ -118,28 +131,26 @@ export function loadCardKeyStore(env: NodeJS.ProcessEnv = process.env): CardKeyS
     console.warn(`[security] OFFLINE_CARD_PRIVATE_KEY is ${problem}; using a random per-process P-256 key. Offline cards stop verifying after a restart. Generate one with: node scripts/gen-card-key.mjs`);
   }
 
-  const previous: KeyObject[] = [];
+  const previous: PreviousCardKey[] = [];
   for (const entry of (env.OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
     try {
-      previous.push(parsePublicKey(entry));
+      const [keyText, until] = entry.split('@');
+      const keepUntil = until ? Date.parse(until.trim()) : undefined;
+      if (until && Number.isNaN(keepUntil)) throw new Error('bad date');
+      previous.push({ key: parsePublicKey(keyText), keepUntil: keepUntil === undefined ? undefined : Math.floor(keepUntil / 1000) });
     } catch (err) {
-      if (failClosed) throw new Error('OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS contains an invalid key (expected SPKI EC P-256).');
+      if (failClosed) throw new Error('OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS contains an invalid entry (expected SPKI EC P-256, optionally @<ISO date>).');
       console.warn('[security] Ignoring an invalid entry in OFFLINE_CARD_PREVIOUS_PUBLIC_KEYS.');
     }
   }
   return createCardKeyStore(privateKey, previous);
 }
 
-let defaultStore: CardKeyStore | null = null;
-function store(): CardKeyStore {
-  if (!defaultStore) defaultStore = loadCardKeyStore();
-  return defaultStore;
-}
-
-export const signCompactJws = (payload: object): string => store().signCompactJws(payload);
-export const getPublicJwk = (): CardJwk => store().getPublicJwk();
-export const getPublicJwks = (): CardJwk[] => store().getPublicJwks();
-export const getKid = (): string => store().getKid();
+// Process-wide helpers: card signing and the published keys, through the KeyProvider.
+export const signCompactJws = (payload: object): string => keyProvider().signCard(payload);
+export const getPublicJwks = (nowSeconds?: number): CardJwk[] => keyProvider().getCardJwks(nowSeconds);
+export const getPublicJwk = (): CardJwk => getPublicJwks()[0];
+export const getKid = (): string => keyProvider().getCardKid();
 
 /**
  * Verifies an ES256 compact JWS against a JWK set. Only ES256 is accepted (no algorithm confusion),

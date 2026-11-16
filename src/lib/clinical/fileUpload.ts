@@ -1,18 +1,23 @@
 /**
- * MEDISTRY Secure Document Upload & Antivirus Scanner
- * Enforces size limits (max 10MB), MIME restrictions, antivirus scanning,
- * and AES-256-GCM encrypted document storage as FHIR DocumentReference.
+ * MEDISTRY Secure Document Upload
+ * Size limit (UPLOAD_MAX_MB, default 10), file type from magic bytes (PDF, PNG, JPEG only), malware scan
+ * (clamd in production, see virusScanners.ts), image metadata removed, then AES-256-GCM encrypted storage as a
+ * FHIR DocumentReference.
  */
 
 import crypto from 'node:crypto';
 import type { FHIRDocumentReference } from '../fhir/types.ts';
 import { encryptField } from '../patient/profile.ts';
+import { createVirusScanner, ScannerUnavailableError, type IVirusScannerAdapter } from './virusScanners.ts';
+import { assertSafeFileType, stripImageMetadata } from './fileSafety.ts';
 
-export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+export { EICAR_TEST_STRING, TestPatternScannerAdapter, ClamdVirusScannerAdapter, ScannerUnavailableError } from './virusScanners.ts';
+export type { IVirusScannerAdapter } from './virusScanners.ts';
+
+/** Upload size limit in MB (UPLOAD_MAX_MB, default 10). */
+export const UPLOAD_MAX_MB = Math.max(1, parseInt(process.env.UPLOAD_MAX_MB || '10', 10) || 10);
+export const MAX_FILE_SIZE_BYTES = UPLOAD_MAX_MB * 1024 * 1024;
 export const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
-
-// EICAR Standard Antivirus Test Signature
-export const EICAR_TEST_STRING = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 
 export interface FileUploadInput {
   filename: string;
@@ -20,27 +25,6 @@ export interface FileUploadInput {
   buffer: Buffer;
   title: string;
   category: 'discharge-summary' | 'laboratory-scan' | 'radiology-report' | 'referral-letter';
-}
-
-export interface IVirusScannerAdapter {
-  scanBuffer(buffer: Buffer): Promise<{ clean: boolean; threatName?: string }>;
-}
-
-/**
- * Built-in ClamAV/EICAR Antivirus Scanner Adapter
- */
-export class StandardVirusScannerAdapter implements IVirusScannerAdapter {
-  async scanBuffer(buffer: Buffer): Promise<{ clean: boolean; threatName?: string }> {
-    const contentString = buffer.toString('utf8');
-    if (contentString.includes(EICAR_TEST_STRING)) {
-      return { clean: false, threatName: 'EICAR_Test_Malware_Signature' };
-    }
-    // Check for suspicious script injection in PDF / images
-    if (contentString.includes('<script>') || contentString.includes('javascript:')) {
-      return { clean: false, threatName: 'Embedded_Script_Exploit_Pattern' };
-    }
-    return { clean: true };
-  }
 }
 
 export interface UploadResult {
@@ -65,36 +49,49 @@ export interface CredentialDocument {
 export class SecureDocumentManager {
   private scanner: IVirusScannerAdapter;
 
-  constructor(scanner: IVirusScannerAdapter = new StandardVirusScannerAdapter()) {
+  /** Defaults to the environment's scanner: clamd with real data (fail closed), test patterns in demo and tests. */
+  constructor(scanner: IVirusScannerAdapter = createVirusScanner()) {
     this.scanner = scanner;
   }
 
-  /** Size, type and malware checks shared by every upload. Throws on failure. */
-  private async check(mimeType: string, buffer: Buffer): Promise<void> {
+  /**
+   * Checks shared by every upload: size, MIME type, content type from magic bytes (and extension), malware scan
+   * of the original bytes. Returns the bytes to store, with image metadata removed. Throws on failure; an
+   * unreachable scanner rejects the upload.
+   */
+  private async check(mimeType: string, buffer: Buffer, filename?: string): Promise<Buffer> {
     if (buffer.length > MAX_FILE_SIZE_BYTES) {
-      throw new Error(`File size exceeds 10MB limit (received ${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+      throw new Error(`File size exceeds ${UPLOAD_MAX_MB}MB limit (received ${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
     }
     if (!ALLOWED_MIME_TYPES.includes(String(mimeType).toLowerCase())) {
-      throw new Error(`Unsupported file type '${mimeType}'. Allowed formats: PDF, JPEG, PNG.`);
+      throw new Error(`Unsupported file type '${String(mimeType).slice(0, 60)}'. Allowed formats: PDF, JPEG, PNG.`);
     }
-    const scanResult = await this.scanner.scanBuffer(buffer);
+    const type = assertSafeFileType(buffer, mimeType, filename);
+    let scanResult: { clean: boolean; threatName?: string };
+    try {
+      scanResult = await this.scanner.scanBuffer(buffer);
+    } catch (err) {
+      if (err instanceof ScannerUnavailableError) throw new Error(`Malware scanner unavailable (${err.message}). Upload rejected; try again later.`);
+      throw err;
+    }
     if (!scanResult.clean) {
       throw new Error(`SECURITY ALERT: Virus or malicious payload detected (${scanResult.threatName}). File rejected.`);
     }
+    return stripImageMetadata(buffer, type);
   }
 
   /** Stores a clinician's licence document (self-registration): same checks, encrypted at rest. */
   async processCredentialDocument(input: { filename: string; mimeType: string; buffer: Buffer }, clinicianId: string): Promise<CredentialDocument> {
     if (!input.buffer.length) throw new Error('The licence document is empty');
-    await this.check(input.mimeType, input.buffer);
+    const stored = await this.check(input.mimeType, input.buffer, input.filename);
     return {
       id: crypto.randomUUID(),
       clinicianId,
       filename: String(input.filename || 'licence').replace(/[^\w. -]/g, '_').slice(0, 120),
       mimeType: input.mimeType.toLowerCase(),
-      sha256: crypto.createHash('sha256').update(input.buffer).digest('hex'),
-      sizeBytes: input.buffer.length,
-      encryptedPayload: encryptField(input.buffer.toString('base64')),
+      sha256: crypto.createHash('sha256').update(stored).digest('hex'),
+      sizeBytes: stored.length,
+      encryptedPayload: encryptField(stored.toString('base64')),
       uploadedAt: new Date().toISOString(),
     };
   }
@@ -108,35 +105,22 @@ export class SecureDocumentManager {
     authorClinicianId: string,
     facilityId: string
   ): Promise<UploadResult> {
-    const { filename, mimeType, buffer, title, category } = input;
+    const { filename, mimeType, title, category } = input;
 
-    // 1. Size Validation (Max 10MB)
-    if (buffer.length > MAX_FILE_SIZE_BYTES) {
-      throw new Error(`File size exceeds 10MB limit (received ${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
-    }
+    // 1-4. Size, type (magic bytes), malware scan; image metadata removed from what is stored
+    const buffer = await this.check(mimeType, input.buffer, filename);
 
-    // 2. MIME Type Validation
-    if (!ALLOWED_MIME_TYPES.includes(mimeType.toLowerCase())) {
-      throw new Error(`Unsupported file type '${mimeType}'. Allowed formats: PDF, JPEG, PNG.`);
-    }
-
-    // 3. Antivirus Scan
-    const scanResult = await this.scanner.scanBuffer(buffer);
-    if (!scanResult.clean) {
-      throw new Error(`SECURITY ALERT: Virus or malicious payload detected (${scanResult.threatName}). File rejected.`);
-    }
-
-    // 4. Compute original SHA-256 checksum
+    // 5. SHA-256 checksum of the stored bytes
     const originalHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // 5. Encrypt document bytes using AES-256-GCM
+    // 6. Encrypt document bytes using AES-256-GCM
     const base64Data = buffer.toString('base64');
     const encryptedFilePayload = encryptField(base64Data);
 
     const docId = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    // 6. Build FHIR DocumentReference resource
+    // 7. Build FHIR DocumentReference resource
     const documentReference: FHIRDocumentReference = {
       resourceType: 'DocumentReference',
       id: docId,

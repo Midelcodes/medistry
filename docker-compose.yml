@@ -31,7 +31,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Malware scanning for uploads (Phase 14). The app talks to clamd over TCP (CLAMD_HOST=localhost, CLAMD_PORT=3310).
+  # On first start freshclam downloads the signature databases, which takes several minutes; clamd answers after that.
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: medistry-clamav
+    restart: unless-stopped
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav_data:/var/lib/clamav
+
 volumes:
   postgres_data:
   redis_data:
+  clamav_data:
 

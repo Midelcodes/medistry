@@ -143,7 +143,7 @@ describe('Running server with a configured card key', () => {
 describe('Fail closed in production', () => {
   test('NODE_ENV=production with DEMO_MODE=0 refuses to start without OFFLINE_CARD_PRIVATE_KEY, and starts with it', async () => {
     const port = 43500 + Math.floor(Math.random() * 400);
-    const env = { NODE_ENV: 'production', DEMO_MODE: '0', JWT_SECRET: strongHex(), FIELD_ENCRYPTION_KEY: strongHex(), OFFLINE_CARD_PRIVATE_KEY: '' };
+    const env = { NODE_ENV: 'production', DEMO_MODE: '0', DEPLOYMENT_COUNTRY: 'NG', DEPLOYMENT_REGION: 'test-region', JWT_SECRET: strongHex(), FIELD_ENCRYPTION_KEY: strongHex(), OFFLINE_CARD_PRIVATE_KEY: '' };
     const missing = startServer(env, port);
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => { missing.child.kill(); resolve(-1); }, 15000);

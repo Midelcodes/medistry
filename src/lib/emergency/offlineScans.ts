@@ -14,7 +14,8 @@
  * see docs/THREAT_MODEL.md.
  */
 import crypto from 'node:crypto';
-import { signCompactJws, verifyCompactJws, getPublicJwks, jwkThumbprint } from '../crypto/cardKeys.ts';
+import { verifyCompactJws, getPublicJwks, jwkThumbprint } from '../crypto/cardKeys.ts';
+import { keyProvider } from '../crypto/keyProvider.ts';
 import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
 import type { PatientEntity } from '../patient/profile.ts';
@@ -131,7 +132,7 @@ export class OfflineScanService {
     if (c.status !== 'VERIFIED') throw new Error('Only verified clinicians can receive an offline pass');
     if (!this.deviceKeys.has(`${clinicianId}:${deviceThumbprint}`)) throw new Error('Device key is not bound to this clinician');
     const exp = nowSeconds + PASS_VALIDITY_SECONDS;
-    const pass = signCompactJws({
+    const pass = keyProvider().signPass({
       typ: PASS_TYPE,
       iss: 'medistry',
       sub: c.id,

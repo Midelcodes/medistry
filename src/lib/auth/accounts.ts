@@ -7,7 +7,7 @@
  */
 import crypto from 'node:crypto';
 import { encryptField, decryptField } from '../patient/profile.ts';
-import { appSecret } from '../security/config.ts';
+import { keyProvider } from '../crypto/keyProvider.ts';
 
 export type AccountRole = 'PATIENT' | 'PROXY' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN';
 
@@ -61,10 +61,19 @@ export function maskPhone(phone: string): string {
   return phone.length > 8 ? `${phone.slice(0, 4)}${'•'.repeat(phone.length - 8)}${phone.slice(-4)}` : '••••';
 }
 
-/** Keyed lookup hash for a phone number or email (FIELD_ENCRYPTION_KEY-derived, so it survives JWT_SECRET rotation). */
-export function identifierHash(kind: 'phone' | 'email', value: string): string {
-  const key = Buffer.from(appSecret('FIELD_ENCRYPTION_KEY', { hex: true }), 'hex');
+/**
+ * Keyed lookup hash for a phone number or email, keyed with a field key version (default: the current one).
+ * During a field key rotation stored hashes may still use an older version, so lookups try every version
+ * (identifierHashes); scripts/rotate-field-key.ts rewrites them to the current version.
+ */
+export function identifierHash(kind: 'phone' | 'email', value: string, version?: number): string {
+  const { key } = keyProvider().getFieldEncryptionKey(version);
   return crypto.createHmac('sha256', key).update(`medistry-${kind}:${value}`).digest('hex');
+}
+
+/** The lookup hash under every readable key version, current first. */
+export function identifierHashes(kind: 'phone' | 'email', value: string): string[] {
+  return keyProvider().getFieldKeyVersions().map((v) => identifierHash(kind, value, v));
 }
 
 export class AccountStore {
@@ -91,13 +100,21 @@ export class AccountStore {
     return [...this.byId.values()];
   }
 
+  private lookup(index: Map<string, string>, kind: 'phone' | 'email', value: string): string | undefined {
+    for (const h of identifierHashes(kind, value)) {
+      const id = index.get(h);
+      if (id) return id;
+    }
+    return undefined;
+  }
+
   byPhoneNumber(phone: string): UserAccount | undefined {
-    const id = this.byPhone.get(identifierHash('phone', phone));
+    const id = this.lookup(this.byPhone, 'phone', phone);
     return id ? this.byId.get(id) : undefined;
   }
 
   byEmailAddress(email: string): UserAccount | undefined {
-    const id = this.byEmail.get(identifierHash('email', email));
+    const id = this.lookup(this.byEmail, 'email', email);
     return id ? this.byId.get(id) : undefined;
   }
 
@@ -120,7 +137,7 @@ export class AccountStore {
 
   setPhone(a: UserAccount, phone: string): void {
     const hash = identifierHash('phone', phone);
-    const owner = this.byPhone.get(hash);
+    const owner = this.lookup(this.byPhone, 'phone', phone);
     if (owner && owner !== a.id) throw new Error('This phone number belongs to another account');
     if (a.phoneHash) this.byPhone.delete(a.phoneHash);
     a.phoneHash = hash;
@@ -131,7 +148,7 @@ export class AccountStore {
 
   setEmail(a: UserAccount, email: string): void {
     const hash = identifierHash('email', email);
-    const owner = this.byEmail.get(hash);
+    const owner = this.lookup(this.byEmail, 'email', email);
     if (owner && owner !== a.id) throw new Error('This email address belongs to another account');
     if (a.emailHash) this.byEmail.delete(a.emailHash);
     a.emailHash = hash;
