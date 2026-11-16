@@ -39,7 +39,7 @@ export class RecordFlagStore {
   flag(patientId: string, recordId: string, note: string): RecordFlag {
     const record = this.deps.clinicalStore.getRecordById(recordId);
     // Drafts are invisible to patients, so they cannot be flagged either.
-    if (!record || record.patientId !== patientId || record.status === 'draft') throw new Error('Record not found');
+    if (!record || record.patientId !== patientId || record.status !== 'final') throw new Error('Record not found');
     const text = note.trim();
     if (text.length < 5) throw new Error('Describe what looks wrong (at least 5 characters)');
 

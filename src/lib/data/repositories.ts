@@ -28,6 +28,9 @@ import type { ProxyRepo, ProxyRelationship } from '../auth/proxies.ts';
 import type { CredentialDocumentRepo } from '../auth/staff.ts';
 import type { CredentialDocument } from '../clinical/fileUpload.ts';
 import type { NotificationDelivery, NotificationDeliveryRepo } from '../notifications/deliveries.ts';
+import type { FacilityApiClient, FacilityApiClientRepo } from '../integrations/apiClients.ts';
+import type { FacilityPatientLink, FacilityPatientLinkRepo } from '../integrations/fhirImport.ts';
+import type { IntakeSession, IntakeSessionRepo } from '../intake/intakeService.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -91,11 +94,15 @@ export interface Snapshot {
   credentialDocuments?: CredentialDocument[];
   // Phase 13
   notificationDeliveries?: NotificationDelivery[];
+  // Phase 15
+  facilityApiClients?: FacilityApiClient[];
+  facilityPatientLinks?: FacilityPatientLink[];
+  intakeSessions?: IntakeSession[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
   ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
-  AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo {
+  AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo {
   readonly mode: StorageMode;
   /** The stored working set, or null for memory storage. */
   loadSnapshot(): Promise<Snapshot | null>;

@@ -32,7 +32,9 @@ const lower = (s: string) => s.trim().toLowerCase();
 const statusCode = (r: any): string | undefined => r?.clinicalStatus?.coding?.[0]?.code;
 const verification = (r: any): string | undefined => r?.verificationStatus?.coding?.[0]?.code;
 
-function allergyFrom(resource: any, source: RecordSource): PatientAllergy | null {
+function allergyFrom(resource: any, recordSource: RecordSource): PatientAllergy | null {
+  // Imported and AI-drafted records are clinician-signed; only 'patient-reported' is labelled differently.
+  const source = recordSource === 'patient-reported' ? 'patient-reported' : 'clinician';
   const substance = resource?.code?.text;
   if (!substance) return null;
   const reaction = resource.reaction?.[0];

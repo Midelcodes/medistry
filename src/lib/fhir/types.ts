@@ -207,6 +207,25 @@ export interface FHIRDocumentReference {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. DiagnosticReport (laboratory or imaging report; Phase 15 imports)
+// ---------------------------------------------------------------------------
+export interface FHIRDiagnosticReport {
+  resourceType: 'DiagnosticReport';
+  id: string;
+  identifier?: Array<{ system?: string; value: string }>;
+  status: 'registered' | 'partial' | 'preliminary' | 'final' | 'amended' | 'corrected' | 'appended' | 'cancelled' | 'entered-in-error' | 'unknown';
+  category?: FHIRCodeableConcept[];
+  code: FHIRCodeableConcept;
+  subject: FHIRReference;
+  encounter?: FHIRReference;
+  effectiveDateTime?: string;
+  issued?: string;
+  performer?: FHIRReference[];
+  result?: FHIRReference[];
+  conclusion?: string;
+}
+
+// ---------------------------------------------------------------------------
 // 8. Bundle (Full Multi-Facility Record Export)
 // ---------------------------------------------------------------------------
 export interface FHIRBundleEntry<T = any> {

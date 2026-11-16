@@ -146,6 +146,18 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
       const row = M.deliveryToRow(d);
       enqueue('notification delivery', () => client.notificationDelivery.upsert({ where: { id: d.id }, create: row as any, update: row as any }));
     },
+    saveFacilityApiClient: (c) => {
+      const row = M.apiClientToRow(c);
+      enqueue(`api client ${c.id}`, () => client.facilityApiClient.upsert({ where: { id: c.id }, create: row as any, update: row as any }));
+    },
+    saveFacilityPatientLink: (l) => {
+      const row = M.patientLinkToRow(l);
+      enqueue('facility identifier link', () => client.facilityPatientLink.upsert({ where: { valueHash: l.valueHash }, create: row as any, update: row as any }));
+    },
+    saveIntakeSession: (s) => {
+      const row = M.intakeToRow(s);
+      enqueue(`intake ${s.id}`, () => client.intakeSession.upsert({ where: { id: s.id }, create: row as any, update: row as any }));
+    },
     appendAudit: (e) => enqueue(`audit ${e.sequenceNumber}`, () => appendContinuing(e)),
 
     async appendComputed(payload) {
@@ -166,7 +178,7 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
 
     async loadSnapshot(): Promise<Snapshot> {
       const [facilities, clinicians, patients, codes, records, audit, requests, grants, eGrants, disputes, cards, scans, keys, flags, notes,
-        users, proxies, documents, deliveries] = await Promise.all([
+        users, proxies, documents, deliveries, apiClients, links, intakes] = await Promise.all([
         client.facility.findMany(), client.clinician.findMany(), client.patient.findMany(), client.emergencyCode.findMany(),
         client.patientRecord.findMany({ orderBy: [{ createdAt: 'asc' }, { versionId: 'asc' }] }),
         client.auditLog.findMany({ orderBy: { sequenceNumber: 'asc' } }),
@@ -177,6 +189,7 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
         client.user.findMany({ where: { hasAccount: true }, include: { facilityAdmin: true } }),
         client.proxyRelationship.findMany({ orderBy: { createdAt: 'asc' } }), client.clinicianLicenceDocument.findMany(),
         client.notificationDelivery.findMany({ orderBy: { createdAt: 'asc' } }),
+        client.facilityApiClient.findMany(), client.facilityPatientLink.findMany(), client.intakeSession.findMany({ orderBy: { createdAt: 'asc' } }),
       ]);
       // Keep the seed's order (Nigerian facilities and clinicians first) for the demo pickers.
       // Ties (same millisecond) break by id, so the order is deterministic.
@@ -202,6 +215,9 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
         proxyRelationships: proxies.map(M.rowToProxy),
         credentialDocuments: documents.map(M.rowToCredentialDocument),
         notificationDeliveries: deliveries.map(M.rowToDelivery),
+        facilityApiClients: apiClients.map(M.rowToApiClient),
+        facilityPatientLinks: links.map(M.rowToPatientLink),
+        intakeSessions: intakes.map(M.rowToIntake),
       };
     },
 
@@ -210,6 +226,7 @@ export function createPrismaPersistence(client: PrismaClient = new PrismaClient(
       await client.$transaction([
         client.notificationLog.deleteMany(), client.disputeTicket.deleteMany(), client.recordFlag.deleteMany(),
         client.proxyRelationship.deleteMany(), client.clinicianLicenceDocument.deleteMany(), client.notificationDelivery.deleteMany(),
+        client.intakeSession.deleteMany(), client.facilityPatientLink.deleteMany(), client.facilityApiClient.deleteMany(),
         client.offlineScanEvent.deleteMany(), client.clinicianDeviceKey.deleteMany(), client.offlineCard.deleteMany(),
         client.emergencyAccessGrant.deleteMany(), client.consentGrant.deleteMany(), client.consentRequest.deleteMany(),
         client.patientRecord.deleteMany(), client.emergencyCode.deleteMany(), client.patient.deleteMany(),

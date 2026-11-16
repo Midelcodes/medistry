@@ -18,6 +18,7 @@ import type {
   FHIRMedicationStatement,
   FHIRProcedure,
   FHIRDocumentReference,
+  FHIRDiagnosticReport,
 } from '../fhir/types.ts';
 
 export type AnyClinicalFHIRResource =
@@ -27,10 +28,13 @@ export type AnyClinicalFHIRResource =
   | FHIRAllergyIntolerance
   | FHIRMedicationStatement
   | FHIRProcedure
-  | FHIRDocumentReference;
+  | FHIRDocumentReference
+  | FHIRDiagnosticReport;
 
-export type RecordStatus = 'draft' | 'final';
-export type RecordSource = 'clinician' | 'patient-reported';
+// 'discarded': a draft the reviewing doctor rejected (kept, never shown, never signable).
+export type RecordStatus = 'draft' | 'final' | 'discarded';
+// 'emr-import': pushed by a facility system (Phase 15). 'ai-draft': proposed by the intake agent, signed by a doctor.
+export type RecordSource = 'clinician' | 'patient-reported' | 'emr-import' | 'ai-draft';
 
 /** Fired after a FINAL (doctor-signed) record is written, corrected or signed from a draft. Never for drafts. */
 export interface FinalRecordEvent {
@@ -55,6 +59,8 @@ export interface StoredClinicalRecord {
   draftedByUserId?: string;
   signedByClinicianId?: string;
   signedAt?: string;
+  // Imports: SHA-256 of "<facilityId>|<resourceType>|<identifier system>|<identifier value>" (idempotent re-imports).
+  externalKey?: string;
 
   // Origin & Federation
   authorClinicianId: string;
@@ -146,15 +152,18 @@ export class ClinicalDataStore {
       countryCode?: string;
       category?: string;
       source?: RecordSource;
+      /** Store as a draft even for a doctor (AI intake proposals wait for the doctor's review and signature). */
+      forceDraft?: boolean;
     }
   ): { record: StoredClinicalRecord; resource: AnyClinicalFHIRResource } {
     // Nurses and records officers create drafts; only a verified doctor creates final records.
-    const isDraft = actor.role === 'NURSE' || actor.role === 'RECORDS_OFFICER';
+    const staffDraft = actor.role === 'NURSE' || actor.role === 'RECORDS_OFFICER';
+    const isDraft = staffDraft || !!context.forceDraft;
 
     // A. Evaluate central authorization policy
     const policyDecision = evaluatePolicy({
       actor,
-      action: isDraft ? 'PATIENT_DRAFT_RECORD' : 'PATIENT_WRITE_RECORD',
+      action: staffDraft ? 'PATIENT_DRAFT_RECORD' : 'PATIENT_WRITE_RECORD',
       targetPatientId: patientId,
       requestedResourceType: resource.resourceType,
       activeConsent: context.consent,
@@ -397,6 +406,130 @@ export class ClinicalDataStore {
     return { record: signed, resource };
   }
 
+  /**
+   * A doctor edits a draft before signing: the edited content becomes a new draft version; the earlier draft is
+   * kept unchanged. Same authorisation as signing.
+   */
+  reviseDraft(
+    draftRecordId: string,
+    resource: AnyClinicalFHIRResource,
+    actor: ActorContext,
+    context: { consent?: ConsentContext | null; facilityId: string }
+  ): { record: StoredClinicalRecord; resource: AnyClinicalFHIRResource } {
+    const draft = this.records.get(draftRecordId);
+    if (!draft) throw new Error(`Clinical record with ID ${draftRecordId} not found`);
+    if (draft.status !== 'draft' || !draft.isLatest) throw new Error('Only the latest draft version can be edited');
+    if (resource.resourceType !== draft.resourceType) throw new Error('A draft cannot change its resource type');
+    const decision = evaluatePolicy({ actor, action: 'PATIENT_WRITE_RECORD', targetPatientId: draft.patientId, requestedResourceType: draft.resourceType, activeConsent: context.consent });
+    if (!decision.allowed) throw new Error(`Forbidden: ${decision.reason}`);
+    this.assertLinkedFacility(actor, context.facilityId, draft.patientId, draft.resourceType);
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    resource.id = id;
+    const json = JSON.stringify(resource);
+    draft.isLatest = false;
+    draft.updatedAt = now;
+    const revised: StoredClinicalRecord = {
+      ...draft, id, versionId: draft.versionId + 1, isLatest: true, previousVersionId: draft.id,
+      encryptedPayload: encryptField(json), payloadSignature: crypto.createHash('sha256').update(json).digest('hex'),
+      effectiveDate: (resource as any).effectiveDateTime || (resource as any).recordedDate || draft.effectiveDate, createdAt: now, updatedAt: now,
+    };
+    this.records.set(id, revised);
+    this.indexRecord(draft.patientId, id);
+    this.persistence?.saveRecord(draft);
+    this.persistence?.saveRecord(revised);
+    this.auditManager.appendEntry({
+      actorId: actor.userId, subjectId: draft.patientId, action: `CLINICAL_DRAFT_EDITED_${draft.resourceType.toUpperCase()}`,
+      accessType: 'NORMAL_CONSENT', resourceType: draft.resourceType, resourceId: id, facilityId: context.facilityId, countryCode: draft.countryCode,
+      ipAddress: '127.0.0.1', userAgent: 'ClinicalClient/1.0', reason: `Draft ${draft.id} edited before signing (v${revised.versionId})`,
+    });
+    return { record: revised, resource };
+  }
+
+  /** A doctor rejects a draft. It is kept (status 'discarded'), never shown and never signable. */
+  discardDraft(draftRecordId: string, actor: ActorContext, context: { consent?: ConsentContext | null; facilityId: string; reason: string }): StoredClinicalRecord {
+    const draft = this.records.get(draftRecordId);
+    if (!draft) throw new Error(`Clinical record with ID ${draftRecordId} not found`);
+    if (draft.status !== 'draft' || !draft.isLatest) throw new Error('Only the latest draft version can be discarded');
+    const decision = evaluatePolicy({ actor, action: 'PATIENT_WRITE_RECORD', targetPatientId: draft.patientId, requestedResourceType: draft.resourceType, activeConsent: context.consent });
+    if (!decision.allowed) throw new Error(`Forbidden: ${decision.reason}`);
+    this.assertLinkedFacility(actor, context.facilityId, draft.patientId, draft.resourceType);
+    draft.status = 'discarded';
+    draft.updatedAt = new Date().toISOString();
+    this.persistence?.saveRecord(draft);
+    this.auditManager.appendEntry({
+      actorId: actor.userId, subjectId: draft.patientId, action: `CLINICAL_DRAFT_DISCARDED_${draft.resourceType.toUpperCase()}`,
+      accessType: 'NORMAL_CONSENT', resourceType: draft.resourceType, resourceId: draft.id, facilityId: context.facilityId,
+      ipAddress: '127.0.0.1', userAgent: 'ClinicalClient/1.0', reason: `Draft discarded by the reviewing doctor: ${context.reason.slice(0, 200)}`,
+    });
+    return draft;
+  }
+
+  /** The latest version of an imported record, by its external key (idempotent imports). */
+  findByExternalKey(externalKey: string): StoredClinicalRecord | undefined {
+    for (const r of this.records.values()) if (r.externalKey === externalKey && r.isLatest) return r;
+    return undefined;
+  }
+
+  /**
+   * Writes a record pushed by an authorised facility system (FHIR import). The facility API client was authorised
+   * by the caller. With a verified author linked to the facility the record is final (signed by that author);
+   * otherwise it is a draft that a doctor must sign. A re-import with the same external key and content changes
+   * nothing; with changed content it becomes a new version.
+   */
+  importRecord(
+    patientId: string,
+    resource: AnyClinicalFHIRResource,
+    context: { facilityId: string; externalKey: string; authorClinicianId?: string; clientId: string; countryCode?: string; category?: string }
+  ): { record: StoredClinicalRecord; outcome: 'created' | 'updated' | 'unchanged' } {
+    const json = JSON.stringify({ ...resource, id: undefined });
+    const signature = crypto.createHash('sha256').update(json).digest('hex');
+    const existing = this.findByExternalKey(context.externalKey);
+    if (existing && existing.patientId !== patientId) throw new Error('This identifier is already used for another patient');
+    if (existing) {
+      const prev = this.decrypt(existing);
+      const prevSig = crypto.createHash('sha256').update(JSON.stringify({ ...prev, id: undefined })).digest('hex');
+      if (prevSig === signature) return { record: existing, outcome: 'unchanged' };
+    }
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    resource.id = id;
+    const stored = JSON.stringify(resource);
+    const final = !!context.authorClinicianId;
+    const record: StoredClinicalRecord = {
+      id, patientId, resourceType: resource.resourceType,
+      versionId: existing ? existing.versionId + 1 : 1, isLatest: true, previousVersionId: existing?.id,
+      status: final ? 'final' : 'draft', source: 'emr-import',
+      draftedByUserId: final ? undefined : `api-client:${context.clientId}`,
+      signedByClinicianId: final ? context.authorClinicianId : undefined, signedAt: final ? now : undefined,
+      authorClinicianId: context.authorClinicianId || `api-client:${context.clientId}`,
+      originFacilityId: context.facilityId, countryCode: context.countryCode || deploymentCountry(), clinicalCategory: context.category,
+      effectiveDate: (resource as any).effectiveDateTime || (resource as any).recordedDate || (resource as any).period?.start || (resource as any).date || now,
+      encryptedPayload: encryptField(stored), payloadSignature: crypto.createHash('sha256').update(stored).digest('hex'),
+      externalKey: context.externalKey, createdAt: now, updatedAt: now,
+    };
+    if (existing) {
+      existing.isLatest = false;
+      existing.updatedAt = now;
+      this.persistence?.saveRecord(existing);
+    }
+    this.records.set(id, record);
+    this.indexRecord(patientId, id);
+    this.persistence?.saveRecord(record);
+    this.auditManager.appendEntry({
+      actorId: `api-client:${context.clientId}`, subjectId: patientId,
+      action: `CLINICAL_RECORD_IMPORTED_${resource.resourceType.toUpperCase()}`, accessType: 'NORMAL_CONSENT',
+      resourceType: resource.resourceType, resourceId: id, facilityId: context.facilityId, countryCode: record.countryCode,
+      ipAddress: '127.0.0.1', userAgent: 'FhirImport/1.0',
+      reason: `${existing ? `Imported update (v${record.versionId})` : 'Imported'} from the facility system; ${final ? `signed by author ${context.authorClinicianId}` : 'no verified author: draft until a doctor signs it'}`,
+    });
+    if (final) {
+      const previous = existing ? { record: existing, resource: this.decrypt(existing) } : undefined;
+      this.emitFinal({ record, resource, previous, actor: { userId: `api-client:${context.clientId}`, role: 'DOCTOR', clinicianId: context.authorClinicianId, facilityId: context.facilityId, isVerifiedClinician: true } });
+    }
+    return { record, outcome: existing ? 'updated' : 'created' };
+  }
+
   /** Drafts waiting for a doctor's signature (for staff and doctors under consent; not shown to patients). */
   getDrafts(patientId: string, actor: ActorContext, consent?: ConsentContext | null): Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> {
     const action = actor.role === 'DOCTOR' ? 'PATIENT_WRITE_RECORD' : 'PATIENT_DRAFT_RECORD';
@@ -450,7 +583,7 @@ export class ClinicalDataStore {
       if (!context.includeHistoricalVersions && !stored.isLatest) {
         continue;
       }
-      if (stored.status === 'draft') continue; // unsigned drafts are never part of the record view
+      if (stored.status !== 'final') continue; // unsigned (or discarded) drafts are never part of the record view
 
       // Decrypt AES-256-GCM payload
       const decryptedJson = decryptField(stored.encryptedPayload);
@@ -498,7 +631,7 @@ export class ClinicalDataStore {
     const results: Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> = [];
     for (const id of this.patientIndex.get(patientId) || []) {
       const stored = this.records.get(id);
-      if (!stored || !stored.isLatest || stored.status === 'draft') continue;
+      if (!stored || !stored.isLatest || stored.status !== 'final') continue;
       results.push({ record: stored, resource: JSON.parse(decryptField(stored.encryptedPayload)) });
     }
 

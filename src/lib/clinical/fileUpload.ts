@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import type { FHIRDocumentReference } from '../fhir/types.ts';
 import { encryptField } from '../patient/profile.ts';
 import { createVirusScanner, ScannerUnavailableError, type IVirusScannerAdapter } from './virusScanners.ts';
-import { assertSafeFileType, stripImageMetadata } from './fileSafety.ts';
+import { assertSafeAudioType, assertSafeFileType, stripImageMetadata } from './fileSafety.ts';
 
 export { EICAR_TEST_STRING, TestPatternScannerAdapter, ClamdVirusScannerAdapter, ScannerUnavailableError } from './virusScanners.ts';
 export type { IVirusScannerAdapter } from './virusScanners.ts';
@@ -78,6 +78,39 @@ export class SecureDocumentManager {
       throw new Error(`SECURITY ALERT: Virus or malicious payload detected (${scanResult.threatName}). File rejected.`);
     }
     return stripImageMetadata(buffer, type);
+  }
+
+  /**
+   * AI intake upload (Phase 15): a photo of a paper record (PDF, PNG, JPEG; image metadata removed) or a voice note
+   * (WebM, Ogg, WAV, MP4, MP3). Size limit, content check and malware scan as for every upload; encrypted at rest.
+   */
+  async processIntakeUpload(input: { filename: string; mimeType: string; buffer: Buffer; kind: 'photo' | 'voice' }): Promise<{ mimeType: string; sha256: string; sizeBytes: number; encryptedPayload: string; stored: Buffer }> {
+    if (!input.buffer.length) throw new Error('The upload is empty');
+    let stored: Buffer;
+    let mimeType: string;
+    if (input.kind === 'photo') {
+      stored = await this.check(input.mimeType, input.buffer, input.filename);
+      mimeType = String(input.mimeType).toLowerCase();
+    } else {
+      if (input.buffer.length > MAX_FILE_SIZE_BYTES) {
+        throw new Error(`File size exceeds ${UPLOAD_MAX_MB}MB limit (received ${(input.buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+      }
+      mimeType = assertSafeAudioType(input.buffer, input.mimeType);
+      let scan: { clean: boolean; threatName?: string };
+      try {
+        scan = await this.scanner.scanBuffer(input.buffer);
+      } catch (err) {
+        if (err instanceof ScannerUnavailableError) throw new Error(`Malware scanner unavailable (${err.message}). Upload rejected; try again later.`);
+        throw err;
+      }
+      if (!scan.clean) throw new Error(`SECURITY ALERT: Virus or malicious payload detected (${scan.threatName}). File rejected.`);
+      stored = input.buffer;
+    }
+    return {
+      mimeType, stored, sizeBytes: stored.length,
+      sha256: crypto.createHash('sha256').update(stored).digest('hex'),
+      encryptedPayload: encryptField(stored.toString('base64')),
+    };
   }
 
   /** Stores a clinician's licence document (self-registration): same checks, encrypted at rest. */

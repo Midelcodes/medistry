@@ -110,6 +110,10 @@ export class ClinicalTimelineEngine {
         const docTitle = resource.content?.[0]?.attachment?.title || 'Clinical Report';
         return { title, summary: `${docTitle} (${resource.content?.[0]?.attachment?.contentType})` };
       }
+      case 'DiagnosticReport': {
+        const title = `Report: ${resource.code?.text || 'Diagnostic report'}`;
+        return { title, summary: `${resource.conclusion || 'No conclusion recorded'} • Status: ${resource.status}` };
+      }
       default:
         return { title: 'Clinical Record', summary: 'HL7 FHIR Record Entry' };
     }

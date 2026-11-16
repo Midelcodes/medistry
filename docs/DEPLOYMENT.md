@@ -51,6 +51,18 @@ be **disabled**, or the model must run **in-country** under an approved agreemen
 approved. The minimiser in the agent (Phase 8) reduces what is sent but does not make an external model acceptable
 for real data.
 
+### The AI intake model (clinician intake from paper or voice)
+
+**Real patient data (PHI) may only be sent to an in-country or self-hosted model, or to a model provider for which
+there is a lawful basis for the transfer.** By default intake uses a deterministic, rule-based stand-in that never
+leaves the process. A real model is used only when `INTAKE_LLM_PROVIDER` is set (`http`, with `INTAKE_LLM_URL`,
+`INTAKE_LLM_API_KEY`, `INTAKE_LLM_MODEL`), and with `DEMO_MODE=0` only when `LLM_IN_COUNTRY_APPROVED=1` records that
+one of those conditions holds. The `http` adapter speaks a small Medistry contract (documented in
+`src/lib/intake/adapters.ts`); wrap the deployment's own model in a service that implements it. OCR and
+speech-to-text have no provider yet (photos and voice notes are refused with a clear message): TODO choose
+in-country providers, under the same rule. Whatever the model returns is checked (only known fields, spans must be
+in the source text) and saved only as drafts; nothing becomes part of a record until a doctor signs it.
+
 ## 3. Required services and settings
 
 | Need | How |
@@ -62,6 +74,7 @@ for real data.
 | First admin | `PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD_HASH`, `PLATFORM_ADMIN_TOTP_SECRET` (`scripts/admin-credentials.ts`) |
 | SMS / USSD | `SMS_PROVIDER=africastalking`, `AT_*`, `SMS_WEBHOOK_SECRET`, `USSD_CALLBACK_SECRET`, `USSD_SERVICE_CODE` (README, "SMS and USSD") |
 | One instance | One application instance per database (README, "Status and known limits") |
+| EMR integration | A facility admin creates an API client (`POST /api/admin/facility-api-clients`); the EMR exchanges it at `POST /api/fhir/token` (client credentials, `API_TOKEN_TTL_SECONDS`, default 300) and pushes FHIR R4 bundles to `POST /api/fhir/import`. The OpenMRS/KenyaEMR pull connector reads `OPENMRS_BASE_URL`, `OPENMRS_USERNAME`, `OPENMRS_PASSWORD` (site-specific mapping TODOs in `src/lib/integrations/emr/OpenMrsConnector.ts`). |
 
 `GET /api/health` reports `version`, `uptimeSeconds`, `storage` (mode, pending and failed writes, status) and
 `malwareScanner` (`up`, `down`, or `not-antivirus` for the demo test-pattern scanner). `status` is `DEGRADED` when

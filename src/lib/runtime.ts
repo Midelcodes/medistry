@@ -13,6 +13,11 @@ import { NotificationDispatcher, ConsoleNotificationProvider, type INotification
 import { NotificationDeliveryStore } from './notifications/deliveries.ts';
 import { AfricasTalkingNotificationProvider, africasTalkingConfig } from './notifications/africasTalking.ts';
 import { UssdService } from './ussd/ussdService.ts';
+import { SecureDocumentManager } from './clinical/fileUpload.ts';
+import { FacilityApiClientStore } from './integrations/apiClients.ts';
+import { FacilityPatientLinkStore, FhirImportService } from './integrations/fhirImport.ts';
+import { createIntakeAdapters } from './intake/adapters.ts';
+import { IntakeService } from './intake/intakeService.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
@@ -41,6 +46,10 @@ export interface Runtime {
   dispatcher: NotificationDispatcher;
   deliveries: NotificationDeliveryStore;
   ussd: UssdService;
+  apiClients: FacilityApiClientStore;
+  patientLinks: FacilityPatientLinkStore;
+  fhirImport: FhirImportService;
+  intake: IntakeService;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -125,10 +134,17 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
     return account ? { phone: accounts.phoneOf(account), email: accounts.emailOf(account) } : undefined;
   };
   const ussd = new UssdService({ accounts, patientsById, auditManager, accessLogManager, offlineCards: offlineCardStore });
+  // Records from existing EMRs (FHIR import) and from paper (AI intake drafts a doctor signs). Phase 15.
+  const documents = new SecureDocumentManager();
+  const patientLinks = new FacilityPatientLinkStore();
+  const apiClients = new FacilityApiClientStore({ auditManager, facilities: seedData.facilities });
+  const fhirImport = new FhirImportService({ clinicalStore, patientsById, clinicians: seedData.clinicians, consentManager, auditManager, links: patientLinks, documents });
+  const intakeAdapters = createIntakeAdapters();
+  const intake = new IntakeService({ clinicalStore, auditManager, documents, ...intakeAdapters });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-    accounts, patientAuth, staff, proxies, ussd,
+    accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake,
   };
 }
 
@@ -144,6 +160,9 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.recordFlags.persistence = persistence;
   rt.consoleProvider.persistence = persistence;
   rt.deliveries.persistence = persistence;
+  rt.apiClients.persistence = persistence;
+  rt.patientLinks.persistence = persistence;
+  rt.intake.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins();
   rt.staff.bootstrapPlatformAdmin();
@@ -211,6 +230,9 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.recordFlags.hydrate(snapshot.recordFlags);
   rt.consoleProvider.hydrate(snapshot.notifications);
   rt.deliveries.hydrate(snapshot.notificationDeliveries || []);
+  rt.apiClients.hydrate(snapshot.facilityApiClients || []);
+  rt.patientLinks.hydrate(snapshot.facilityPatientLinks || []);
+  rt.intake.hydrate(snapshot.intakeSessions || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

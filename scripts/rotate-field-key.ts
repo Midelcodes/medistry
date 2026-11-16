@@ -30,6 +30,8 @@ const TARGETS: Array<{ model: string; id: string; columns: string[] }> = [
   { model: 'disputeTicket', id: 'ticketId', columns: ['encryptedDisputeReason'] },
   { model: 'notificationLog', id: 'id', columns: ['encryptedRecipient', 'encryptedTitle', 'encryptedBody'] },
   { model: 'auditLog', id: 'id', columns: ['encryptedReason'] }, // the audit hash covers the plaintext, so the chain is unaffected
+  { model: 'intakeSession', id: 'id', columns: ['encryptedSourceText', 'encryptedFile', 'encryptedProposals'] },
+  { model: 'facilityPatientLink', id: 'valueHash', columns: ['encryptedValue'] }, // lookups try every key version meanwhile
 ];
 
 async function main(): Promise<number> {

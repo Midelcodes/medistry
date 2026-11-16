@@ -23,6 +23,9 @@ import type { UserAccount } from '../../auth/accounts.ts';
 import type { ProxyRelationship } from '../../auth/proxies.ts';
 import type { CredentialDocument } from '../../clinical/fileUpload.ts';
 import type { NotificationDelivery } from '../../notifications/deliveries.ts';
+import type { FacilityApiClient } from '../../integrations/apiClients.ts';
+import type { FacilityPatientLink } from '../../integrations/fhirImport.ts';
+import type { IntakeSession } from '../../intake/intakeService.ts';
 
 type Row = Record<string, any>;
 
@@ -86,6 +89,29 @@ export const rowToUserAccount = (r: Row): UserAccount => clean({
   lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
   ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined,
 } as UserAccount);
+
+// ---------- Phase 15: facility API clients, identifier links, intake sessions ----------
+export const apiClientToRow = (c: FacilityApiClient): Row => ({ ...c, createdAt: new Date(c.createdAt), lastUsedAt: date(c.lastUsedAt) });
+export const rowToApiClient = (r: Row): FacilityApiClient => clean({
+  id: r.id, facilityId: r.facilityId, name: r.name, clientId: r.clientId, secretHash: r.secretHash, scopes: r.scopes, status: r.status,
+  createdBy: r.createdBy, createdAt: iso(r.createdAt)!, lastUsedAt: iso(r.lastUsedAt),
+} as FacilityApiClient);
+export const patientLinkToRow = (l: FacilityPatientLink): Row => ({ ...l, createdAt: new Date(l.createdAt) });
+export const rowToPatientLink = (r: Row): FacilityPatientLink => ({
+  facilityId: r.facilityId, system: r.system, valueHash: r.valueHash, encryptedValue: r.encryptedValue, patientId: r.patientId, createdAt: iso(r.createdAt)!,
+});
+export const intakeToRow = (s: IntakeSession): Row => ({
+  id: s.id, patientId: s.patientId, clinicianId: s.clinicianId, facilityId: s.facilityId, kind: s.kind,
+  ocrAdapter: s.adapters.ocr ?? null, sttAdapter: s.adapters.stt ?? null, llmAdapter: s.adapters.llm, model: s.adapters.model,
+  encryptedSourceText: s.encryptedSourceText, encryptedFile: s.encryptedFile ?? null, fileMimeType: s.fileMimeType ?? null, fileSha256: s.fileSha256 ?? null,
+  encryptedProposals: s.encryptedProposals, status: s.status, createdAt: new Date(s.createdAt), updatedAt: new Date(s.updatedAt),
+});
+export const rowToIntake = (r: Row): IntakeSession => clean({
+  id: r.id, patientId: r.patientId, clinicianId: r.clinicianId, facilityId: r.facilityId, kind: r.kind,
+  adapters: clean({ ocr: r.ocrAdapter ?? undefined, stt: r.sttAdapter ?? undefined, llm: r.llmAdapter, model: r.model }),
+  encryptedSourceText: r.encryptedSourceText, encryptedFile: r.encryptedFile ?? undefined, fileMimeType: r.fileMimeType ?? undefined, fileSha256: r.fileSha256 ?? undefined,
+  encryptedProposals: r.encryptedProposals, status: r.status, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+} as IntakeSession);
 
 // ---------- SMS delivery record (Phase 13): phone as hash + last 3 digits only, no message text ----------
 export const deliveryToRow = (d: NotificationDelivery): Row => ({
@@ -182,7 +208,7 @@ export function rowToCode(r: Row): EmergencyCodeEntity {
 export const recordToRow = (x: StoredClinicalRecord): Row => ({
   id: x.id, patientId: x.patientId, resourceType: x.resourceType, versionId: x.versionId, isLatest: x.isLatest,
   previousVersionId: x.previousVersionId ?? null,
-  status: x.status === 'draft' ? 'DRAFT' : 'FINAL', source: x.source === 'patient-reported' ? 'PATIENT_REPORTED' : 'CLINICIAN',
+  status: x.status.toUpperCase(), source: x.source.toUpperCase().replace('-', '_'), externalKey: x.externalKey ?? null,
   draftedByUserId: x.draftedByUserId ?? null, signedByClinicianId: x.signedByClinicianId ?? null, signedAt: date(x.signedAt),
   authorClinicianId: x.authorClinicianId, originFacilityId: x.originFacilityId, countryCode: x.countryCode,
   clinicalCategory: x.clinicalCategory ?? null, effectiveDate: x.effectiveDate,
@@ -192,7 +218,7 @@ export const recordToRow = (x: StoredClinicalRecord): Row => ({
 export const rowToRecord = (r: Row): StoredClinicalRecord => clean({
   id: r.id, patientId: r.patientId, resourceType: r.resourceType, versionId: r.versionId, isLatest: r.isLatest,
   previousVersionId: r.previousVersionId ?? undefined,
-  status: r.status === 'DRAFT' ? 'draft' : 'final', source: r.source === 'PATIENT_REPORTED' ? 'patient-reported' : 'clinician',
+  status: String(r.status).toLowerCase(), source: String(r.source).toLowerCase().replace('_', '-'), externalKey: r.externalKey ?? undefined,
   draftedByUserId: r.draftedByUserId ?? undefined, signedByClinicianId: r.signedByClinicianId ?? undefined, signedAt: iso(r.signedAt),
   authorClinicianId: r.authorClinicianId, originFacilityId: r.originFacilityId, countryCode: r.countryCode,
   clinicalCategory: r.clinicalCategory ?? undefined, effectiveDate: r.effectiveDate,

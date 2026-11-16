@@ -62,7 +62,7 @@ log('info', 'startup', {
 });
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-  accounts, patientAuth, staff, proxies, deliveries, ussd } = runtime;
+  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -91,6 +91,9 @@ const handlePortalApi = createPortalApi({
   proxies,
   deliveries,
   ussd,
+  apiClients,
+  fhirImport,
+  intake,
 });
 
 // Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th
@@ -103,7 +106,8 @@ housekeeping();
 setInterval(housekeeping, 24 * 60 * 60 * 1000).unref();
 
 // Site pages: shared layout + one template per page
-type PageDef = { file: string; nav: string; title: string; description: string; script?: string; module?: boolean };
+// permissions: a Permissions-Policy that replaces the default (camera and microphone are off everywhere else).
+type PageDef = { file: string; nav: string; title: string; description: string; script?: string; module?: boolean; permissions?: string };
 const PAGES: Record<string, PageDef> = {
   '/': { file: 'home', nav: 'home', title: 'Medistry | Portable Medical Records & Emergency Access', description: 'Medistry gives patients control of their FHIR-based medical records and lets verified clinicians reach life-saving information through an audited emergency break-glass scan.' },
   '/about': { file: 'about', nav: 'about', title: 'About | Medistry', description: 'Why Medistry exists, the principles behind it, and how it aligns with the Nigeria Data Protection Act 2023.' },
@@ -111,7 +115,8 @@ const PAGES: Record<string, PageDef> = {
   '/how-it-works': { file: 'how-it-works', nav: 'how', title: 'How It Works | Medistry', description: 'From a random emergency code to a read-only, 60-minute break-glass grant, step by step.' },
   '/emergency': { file: 'emergency', nav: 'emergency', title: 'Emergency Access | Medistry', description: 'Scan or enter a patient emergency code to start the clinician break-glass process.', script: 'emergency' },
   '/patients': { file: 'patients', nav: 'patients', title: 'Patient Portal | Medistry', description: 'View your record timeline, approve or revoke access, see who accessed your record, and manage your emergency code.', script: 'patients' },
-  '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians' },
+  // Microphone for voice-note intake (Phase 15); photos use the file picker, which needs no camera permission.
+  '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians', permissions: 'camera=(), microphone=(self), geolocation=(), payment=()' },
   '/facilities': { file: 'facilities', nav: 'facilities', title: 'Facilities | Medistry', description: 'Accredited facilities and verified clinicians on Medistry.', script: 'facilities' },
   '/status': { file: 'status', nav: '', title: 'Platform Status | Medistry', description: 'Live health of this Medistry environment.', script: 'status' },
   '/contact': { file: 'contact', nav: 'contact', title: 'Contact | Medistry', description: 'Talk to the Medistry team about onboarding, integration or a walkthrough.', script: 'contact' },
@@ -198,10 +203,11 @@ function sendJson(res: http.ServerResponse, statusCode: number, data: any) {
 }
 
 // Helper to send HTML responses
-function sendHtml(res: http.ServerResponse, statusCode: number, html: string) {
+function sendHtml(res: http.ServerResponse, statusCode: number, html: string, permissions?: string) {
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
     ...getSecurityHttpHeaders(),
+    ...(permissions ? { 'Permissions-Policy': permissions } : {}),
   };
   res.writeHead(statusCode, headers);
   res.end(html);
@@ -304,9 +310,10 @@ const server = http.createServer(async (req, res) => {
 
     // Site pages
     if (method === 'GET' && PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]) {
-      const html = renderPage(PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]);
+      const page = PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname];
+      const html = renderPage(page);
       if (html) {
-        sendHtml(res, 200, html);
+        sendHtml(res, 200, html, page.permissions);
         return;
       }
     }

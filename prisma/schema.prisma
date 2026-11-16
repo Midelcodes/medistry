@@ -46,13 +46,16 @@ enum BreakGlassReason {
 }
 
 enum RecordStatus {
-  DRAFT // created by a nurse or records officer; invisible and off the card until a doctor signs
-  FINAL // signed by a verified doctor
+  DRAFT     // created by a nurse or records officer, imported without a verified author, or proposed by AI intake; invisible until a doctor signs
+  FINAL     // signed by a verified doctor
+  DISCARDED // a draft the reviewing doctor rejected (kept, never shown, never signable)
 }
 
 enum RecordSource {
   CLINICIAN
   PATIENT_REPORTED // stated by the patient; shown as "Patient-reported, not clinician-verified"
+  EMR_IMPORT       // pushed by a facility system (FHIR import, Phase 15)
+  AI_DRAFT         // proposed by the AI intake agent; final only after a doctor signs
 }
 
 enum RecordFlagStatus {
@@ -179,6 +182,7 @@ model Facility {
   clinicians      Clinician[]
   clinicianLinks  ClinicianFacility[]
   admins          FacilityAdmin[]
+  apiClients      FacilityApiClient[]
   authoredRecords PatientRecord[]
   emergencyGrants EmergencyAccessGrant[]
   consentGrants   ConsentGrant[]
@@ -293,6 +297,8 @@ model Patient {
   offlineCards         OfflineCard[]
   offlineScans         OfflineScanEvent[]
   proxies              ProxyRelationship[]
+  facilityLinks        FacilityPatientLink[]
+  intakeSessions       IntakeSession[]
 }
 
 enum ProxyRelationshipKind {
@@ -422,6 +428,7 @@ model PatientRecord {
   draftedByUserId     String?          // nurse or records officer who created the draft
   signedByClinicianId String?          // doctor who signed (set for every FINAL version)
   signedAt            DateTime?
+  externalKey         String?          // imports: SHA-256 of facility|type|identifier, for idempotent re-imports
   flags               RecordFlag[]
 
   // Author: a clinician id, or a staff user id for drafts (so no foreign key).
@@ -441,6 +448,7 @@ model PatientRecord {
 
   @@index([patientId, resourceType, isLatest])
   @@index([patientId, status])
+  @@index([externalKey])
 }
 
 // A patient's note that a record may be wrong. It never changes the record; the signing clinician is notified.
@@ -556,6 +564,58 @@ model NotificationLog {
 
 // Tamper-evident audit chain. No foreign keys: actors may be patients, staff or systems, and the log is never
 // rewritten. Appends happen under a transaction-scoped advisory lock so concurrent writers cannot fork the chain.
+// A facility EMR's machine credentials (Phase 15). Only an scrypt hash of the secret is stored.
+model FacilityApiClient {
+  id         String    @id
+  facilityId String
+  facility   Facility  @relation(fields: [facilityId], references: [id])
+  name       String
+  clientId   String    @unique
+  secretHash String
+  scopes     String[]
+  status     String    // ACTIVE | REVOKED
+  createdBy  String    // admin user id
+  createdAt  DateTime
+  lastUsedAt DateTime?
+}
+
+// A facility identifier (e.g. MRN) learnt from a matched import. Keyed hash for lookup; encrypted copy for re-hashing.
+model FacilityPatientLink {
+  valueHash      String   @id
+  facilityId     String
+  system         String
+  encryptedValue String
+  patientId      String
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  createdAt      DateTime
+
+  @@index([facilityId, patientId])
+}
+
+// AI intake (Phase 15): the source (encrypted), the adapters used, and the proposals with their source spans.
+model IntakeSession {
+  id                  String   @id
+  patientId           String
+  patient             Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicianId         String
+  facilityId          String
+  kind                String   // photo | voice | text
+  ocrAdapter          String?
+  sttAdapter          String?
+  llmAdapter          String
+  model               String
+  encryptedSourceText String
+  encryptedFile       String?
+  fileMimeType        String?
+  fileSha256          String?
+  encryptedProposals  String
+  status              String   // review | signed
+  createdAt           DateTime
+  updatedAt           DateTime
+
+  @@index([patientId])
+}
+
 enum DeliveryStatus {
   QUEUED
   SENT

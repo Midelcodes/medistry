@@ -93,6 +93,19 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 8
 .tab-count { display: inline-block; background: var(--accent-rose); color: #fff; border-radius: 999px; font-size: 0.72rem; padding: 1px 7px; margin-left: 4px; }
 .tab-panel { background: var(--bg-card); border-radius: var(--radius-md); box-shadow: var(--shadow-md); padding: 28px; border: 1px solid rgba(220, 226, 245, 0.8); }
 .tab-panel[hidden] { display: none; }
+/* AI intake review (clinician console) */
+.intake-kinds { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.intake-kinds legend { font-weight: 600; margin-bottom: 6px; }
+.intake-voice { display: flex; align-items: center; gap: 12px; }
+.intake-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .intake-grid { grid-template-columns: minmax(0, 1fr); } }
+.intake-source { white-space: pre-wrap; line-height: 1.7; font-size: 0.95rem; overflow-wrap: anywhere; }
+.intake-source mark { background: #E0E7FF; color: inherit; border-radius: 3px; padding: 0 2px; }
+.intake-source mark.active { background: #FDE68A; outline: 2px solid #D97706; }
+.intake-field { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.intake-field input { min-height: 44px; }
+.intake-field.low input { border-color: #D97706; background: #FFFBEB; }
+.intake-from { font-size: 0.82rem; color: var(--text-muted); }
 
 /* Pickers, toolbars, chips */
 .picker-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 18px 24px; }

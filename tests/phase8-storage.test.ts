@@ -21,7 +21,7 @@ function recordingPersistence() {
     grant: new Map<string, any>(), dispute: new Map<string, any>(), card: new Map<string, any>(), scan: new Map<string, any>(),
     deviceKey: new Map<string, any>(), flag: new Map<string, any>(), notification: [] as any[],
     user: new Map<string, any>(), proxy: new Map<string, any>(), document: new Map<string, any>(),
-    delivery: new Map<string, any>(),
+    delivery: new Map<string, any>(), apiClient: new Map<string, any>(), link: new Map<string, any>(), intake: new Map<string, any>(),
   };
   let refusedAudit = 0;
   const p: Persistence & { tables: typeof t; refusedAudit: () => number } = {
@@ -46,6 +46,9 @@ function recordingPersistence() {
     saveProxyRelationship: (r) => t.proxy.set(r.id, M.proxyToRow(r)),
     saveCredentialDocument: (d) => t.document.set(d.id, M.credentialDocumentToRow(d)),
     saveNotificationDelivery: (d) => t.delivery.set(d.id, M.deliveryToRow(d)),
+    saveFacilityApiClient: (c) => t.apiClient.set(c.id, M.apiClientToRow(c)),
+    saveFacilityPatientLink: (l) => t.link.set(l.valueHash, M.patientLinkToRow(l)),
+    saveIntakeSession: (s) => t.intake.set(s.id, M.intakeToRow(s)),
     appendAudit: (e) => {
       // Same continuity rule as the Prisma repository's locked append.
       const last = t.audit.at(-1);
@@ -66,6 +69,8 @@ function recordingPersistence() {
         userAccounts: [...t.user.values()].map(M.rowToUserAccount), proxyRelationships: [...t.proxy.values()].map(M.rowToProxy),
         credentialDocuments: [...t.document.values()].map(M.rowToCredentialDocument),
         notificationDeliveries: [...t.delivery.values()].map(M.rowToDelivery),
+        facilityApiClients: [...t.apiClient.values()].map(M.rowToApiClient), facilityPatientLinks: [...t.link.values()].map(M.rowToPatientLink),
+        intakeSessions: [...t.intake.values()].map(M.rowToIntake),
       };
     },
     flush: async () => {}, close: async () => {},
@@ -115,7 +120,19 @@ async function doEverything(rt: Runtime) {
     facilityRegistryCode: 'fac-luth-001', password: 'synthetic-password-1', licenceExpiresOn: '2099-01-01',
     licenceDocument: { filename: 'licence.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.4 Synthetic licence bytes').toString('base64') },
   }, info);
-  return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered };
+
+  // Phase 15: a facility API client imports a bundle (learning the facility MRN), and an AI intake drafts records.
+  const admin = rt.accounts.get(`admin-${doctor.facilityId}-demo`)!;
+  const { client } = await rt.apiClients.create(admin, { name: 'Synthetic EMR' }, info);
+  await rt.fhirImport.importBundle({
+    resourceType: 'Bundle', type: 'collection', entry: [
+      { fullUrl: 'urn:uuid:p1', resource: { resourceType: 'Patient', identifier: [{ system: 'urn:medistry:patient-id', value: patient.id }, { system: 'urn:synthetic:mrn', value: 'SYN-MRN-0001' }] } },
+      { resource: { resourceType: 'Condition', identifier: [{ system: 'urn:synthetic:condition', value: 'c-1' }], code: { text: 'Synthetic imported condition' }, subject: { reference: 'urn:uuid:p1' } } },
+    ],
+  }, { id: client.id, clientId: client.clientId, facilityId: client.facilityId }, info);
+  const intake = await rt.intake.create({ patient, kind: 'text', text: 'Diagnosis: Synthetic intake diagnosis' },
+    actor, rt.consentManager.resolveActiveConsent(patient.id, doctor.id, doctor.facilityId) as any, info);
+  return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered, intake };
 }
 
 describe('Storage selection', () => {
@@ -167,6 +184,10 @@ describe('Write-through and restart (recording repository, same rows as Postgres
     same(b.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), a.accounts.all().sort((x, y) => x.id.localeCompare(y.id)), 'user accounts');
     same(b.proxies.forPatient(did.patient.id), a.proxies.forPatient(did.patient.id), 'proxy relationships');
     same(b.deliveries.all(), a.deliveries.all(), 'SMS delivery records');
+    assert.strictEqual(b.patientLinks.find(did.patient.primaryFacilityId!, 'urn:synthetic:mrn', 'SYN-MRN-0001'), did.patient.id, 'facility identifier link');
+    const sameFacility = { userId: 'test', role: 'DOCTOR' as const, facilityId: did.patient.primaryFacilityId };
+    same(b.intake.get(did.intake.intakeId, sameFacility), a.intake.get(did.intake.intakeId, sameFacility), 'intake session');
+    assert.strictEqual(b.apiClients.list(b.accounts.get(`admin-${did.patient.primaryFacilityId}-demo`)!).length, 1, 'API client');
     same(b.seedData.clinicians.find((c) => c.id === did.registered.clinician.id), did.registered.clinician, 'registered clinician');
     assert.strictEqual(b.staff.listForReview(b.accounts.get('admin-platform-demo')!, 'PENDING')[0].hasLicenceDocument, true, 'licence document');
     for (const id of a.patientsById.keys()) {
@@ -193,7 +214,8 @@ describe('Write-through and restart (recording repository, same rows as Postgres
       rt.codeByPatient.get(did.patient.id)!.formattedCode, rt.codeByPatient.get(did.patient.id)!.rawCode, did.card.token,
       'Synthetic follow-up reason', 'Synthetic break-glass detail', 'Synthetic second opinion', 'Synthetic scan detail',
       'Synthetic flag note', 'Synthetic dispute reason', 'One-time code',
-      '+2348000000101', '+2348000000102', '+2348000000103', 'registrant@example.org', 'synthetic-password-1', 'Synthetic licence bytes', 'licence.pdf'];
+      '+2348000000101', '+2348000000102', '+2348000000103', 'registrant@example.org', 'synthetic-password-1', 'Synthetic licence bytes', 'licence.pdf',
+      'SYN-MRN-0001', 'Synthetic imported condition', 'Synthetic intake diagnosis'];
     for (const b of banned) assert.ok(!plain.includes(b), `stored rows must not contain ${String(b).slice(0, 30)}`);
   });
 

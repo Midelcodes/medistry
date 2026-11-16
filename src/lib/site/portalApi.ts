@@ -30,6 +30,9 @@ import { currentActing, runActing, type ProxyActing } from '../audit/actingConte
 import type { NotificationDeliveryStore } from '../notifications/deliveries.ts';
 import type { UssdService } from '../ussd/ussdService.ts';
 import { log } from '../ops/logger.ts';
+import { API_TOKEN_TTL_SECONDS, type FacilityApiClientStore, type FacilityApiClient } from '../integrations/apiClients.ts';
+import type { FhirImportService } from '../integrations/fhirImport.ts';
+import type { IntakeService } from '../intake/intakeService.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -67,6 +70,10 @@ export interface PortalContext {
   // SMS delivery records and USSD (Phase 13)
   deliveries: NotificationDeliveryStore;
   ussd: UssdService;
+  // Records from EMRs and from paper (Phase 15)
+  apiClients: FacilityApiClientStore;
+  fhirImport: FhirImportService;
+  intake: IntakeService;
 }
 
 class HttpError extends Error {
@@ -97,6 +104,9 @@ export function createPortalApi(ctx: PortalContext) {
   // Provider callbacks (per calling IP: the provider's servers).
   const webhookLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 120 }); // SMS delivery reports
   const ussdLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });    // USSD callbacks
+  const tokenLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 30 });    // facility API client tokens
+  const importLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 });   // FHIR bundle imports
+  const intakeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });   // AI intake (uploads, model calls)
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
   // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
@@ -227,6 +237,15 @@ export function createPortalApi(ctx: PortalContext) {
     const clinician = authenticate(req);
     if (!clinician) throw new HttpError(401, 'Clinician sign-in required');
     return clinician;
+  }
+
+  /** The active facility API client behind a Bearer token, with the given scope. */
+  function apiClientFrom(req: http.IncomingMessage, scope: string): FacilityApiClient {
+    const claims = sessions.read(bearerOf(req));
+    const client = claims?.kind === 'api-client' ? ctx.apiClients.get(claims.subject) : undefined;
+    if (!client || client.status !== 'ACTIVE') throw new HttpError(401, 'A valid facility API token is required (POST /api/fhir/token)');
+    if (!client.scopes.includes(scope as any)) throw new HttpError(403, `This client lacks the ${scope} scope`);
+    return client;
   }
 
   /** PENDING clinicians can sign in and see their status, nothing clinical. */
@@ -404,6 +423,11 @@ export function createPortalApi(ctx: PortalContext) {
       sendJson(res, 200, result, extraHeaders.get(req));
       return true;
     } catch (err: any) {
+      // FHIR import errors answer with the OperationOutcome itself.
+      if (err?.outcome?.resourceType === 'OperationOutcome') {
+        sendJson(res, err.status || 422, err.outcome, { 'Content-Type': 'application/fhir+json' });
+        return true;
+      }
       const status = typeof err?.status === 'number' ? err.status : /Forbidden|Unauthorized/.test(err?.message || '') ? 403 : 400;
       sendJson(res, status, { error: err?.message || 'Request failed' });
       return true;
@@ -729,6 +753,28 @@ export function createPortalApi(ctx: PortalContext) {
     // ---------- Admins ----------
     if (pathname.startsWith('/api/admin/')) return adminRoute(req, method, pathname, url);
 
+    // ---------- Facility systems: FHIR import (client credentials, short-lived token) ----------
+    if (method === 'POST' && pathname === '/api/fhir/token') {
+      limit(tokenLimiter, req);
+      const body = await readCallback(req); // form-encoded (OAuth 2.0 style) or JSON
+      if (body.grant_type !== 'client_credentials') throw new HttpError(400, 'grant_type must be client_credentials');
+      let id = body.client_id;
+      let secret = body.client_secret;
+      const basic = String(req.headers.authorization || '').match(/^Basic\s+(.+)$/i);
+      if (basic) [id, secret] = Buffer.from(basic[1], 'base64').toString('utf8').split(':');
+      const client = await ctx.apiClients.authenticate(id, secret, requestInfo(req));
+      if (!client) throw new HttpError(401, 'invalid_client');
+      return { access_token: sessions.issue('api-client', client.id, API_TOKEN_TTL_SECONDS * 1000), token_type: 'Bearer', expires_in: API_TOKEN_TTL_SECONDS, scope: client.scopes.join(' ') };
+    }
+    if (method === 'POST' && pathname === '/api/fhir/import') {
+      limit(importLimiter, req);
+      const client = apiClientFrom(req, 'fhir.import');
+      const bundle = await readBody(req, 8 * 1024 * 1024);
+      const result = await ctx.fhirImport.importBundle(bundle, { id: client.id, clientId: client.clientId, facilityId: client.facilityId }, requestInfo(req));
+      extraHeaders.set(req, { 'Content-Type': 'application/fhir+json' });
+      return result.response;
+    }
+
     // ---------- Clinician sign-in ----------
     if (method === 'GET' && (m = pathname.match(/^\/api\/demo\/totp\/([^/]+)$/))) {
       // Demo authenticator: shows the current code so visitors can sign in. Demo mode only, never in production,
@@ -840,6 +886,43 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
     // Everything below is clinical (records, consent, emergency grants, offline passes): verified clinicians only.
     requireVerified(clinician);
+
+    // ---------- Drafts and AI intake (Phase 15): all need the patient's active consent ----------
+    const consentFor = (patientId: string) => {
+      const consent = ctx.consentManager.resolveActiveConsent(patientId, clinician.id, clinician.facilityId);
+      if (!consent) throw new HttpError(403, 'No active patient consent. Request access first.');
+      return consent as any;
+    };
+    if (method === 'POST' && pathname === '/api/clinician/intake') {
+      limit(intakeLimiter, req);
+      const body = await readBody(req, 15 * 1024 * 1024); // photo or voice note, base64, at most UPLOAD_MAX_MB decoded
+      const patient = getPatient(String(body.patientId || ''));
+      return ctx.intake.create({ patient, kind: body.kind, text: body.text, file: body.file }, clinicianActor(clinician), consentFor(patient.id), requestInfo(req));
+    }
+    if ((m = pathname.match(/^\/api\/clinician\/intake\/([^/]+)(?:\/(.*))?$/))) {
+      const intakeId = decodeURIComponent(m[1]);
+      const sub = m[2] || '';
+      const view = ctx.intake.get(intakeId, clinicianActor(clinician));
+      const consent = consentFor(view.patientId);
+      if (method === 'GET' && sub === '') return view;
+      if (method === 'POST' && sub === 'sign') return ctx.intake.signAll(intakeId, clinicianActor(clinician), consent, requestInfo(req), (await readBody(req)).recordIds);
+      let d: RegExpMatchArray | null;
+      if (method === 'POST' && (d = sub.match(/^drafts\/([^/]+)$/))) return ctx.intake.revise(intakeId, decodeURIComponent(d[1]), (await readBody(req)).fields, clinicianActor(clinician), consent);
+      if (method === 'POST' && (d = sub.match(/^drafts\/([^/]+)\/discard$/))) return ctx.intake.discard(intakeId, decodeURIComponent(d[1]), (await readBody(req)).reason, clinicianActor(clinician), consent);
+      return undefined;
+    }
+    // Drafts waiting for a doctor (imported without a verified author, or created by staff): list and sign.
+    if (method === 'GET' && (m = pathname.match(/^\/api\/clinician\/patients\/([^/]+)\/drafts$/))) {
+      const patient = getPatient(m[1]);
+      const drafts = ctx.clinicalStore.getDrafts(patient.id, clinicianActor(clinician), consentFor(patient.id));
+      return { drafts: drafts.map(({ record, resource }) => ({ recordId: record.id, resourceType: record.resourceType, source: record.source, originFacilityId: record.originFacilityId, versionId: record.versionId, createdAt: record.createdAt, resource })) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/clinician\/drafts\/([^/]+)\/sign$/))) {
+      const draft = ctx.clinicalStore.getRecordById(decodeURIComponent(m[1]));
+      if (!draft || draft.status !== 'draft') throw new HttpError(404, 'Draft not found');
+      const { record } = ctx.clinicalStore.signDraft(draft.id, clinicianActor(clinician), { consent: consentFor(draft.patientId), facilityId: clinician.facilityId });
+      return { recordId: record.id, versionId: record.versionId, previousVersionId: record.previousVersionId, status: record.status };
+    }
 
     if (method === 'GET' && pathname === '/api/clinician/record-flags') {
       limit(cardLimiter, req);
@@ -1091,6 +1174,20 @@ export function createPortalApi(ctx: PortalContext) {
       const c = await ctx.staff.review(admin, decodeURIComponent(m[1]), m[2] as 'approve' | 'reject', body.reason, info);
       return { clinicianId: c.id, status: c.status };
     }
+    // Facility API clients for EMR integration: created by a facility admin (own facility) or a platform admin.
+    if (method === 'GET' && pathname === '/api/admin/facility-api-clients') return { clients: ctx.apiClients.list(admin) };
+    if (method === 'POST' && pathname === '/api/admin/facility-api-clients') {
+      const { client, clientSecret } = await ctx.apiClients.create(admin, await readBody(req), info);
+      return {
+        id: client.id, clientId: client.clientId, clientSecret, facilityId: client.facilityId, scopes: client.scopes,
+        note: 'Store the client secret now: it is shown only once. Exchange it at POST /api/fhir/token for a short-lived token.',
+      };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/facility-api-clients\/([^/]+)\/revoke$/))) {
+      const c = ctx.apiClients.revoke(admin, decodeURIComponent(m[1]), info);
+      return { id: c.id, status: c.status };
+    }
+
     if (method === 'POST' && pathname === '/api/admin/facility-admins') {
       const { admin: created, totpEnrolment } = await ctx.staff.createFacilityAdmin(admin, await readBody(req), info);
       return { adminId: created.id, facilityId: created.facilityId, totpEnrolment };

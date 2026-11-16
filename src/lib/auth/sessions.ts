@@ -11,7 +11,8 @@
  */
 import crypto from 'node:crypto';
 
-export type SessionKind = 'clinician' | 'admin' | 'person';
+// 'api-client': a facility EMR's short-lived client-credentials token (Phase 15).
+export type SessionKind = 'clinician' | 'admin' | 'person' | 'api-client';
 
 export interface SessionClaims {
   kind: SessionKind;
@@ -52,7 +53,7 @@ export class SessionManager {
     } catch {
       return null;
     }
-    if (!['clinician', 'admin', 'person'].includes(data.k) || typeof data.s !== 'string' || !(data.e > now)) return null;
+    if (!['clinician', 'admin', 'person', 'api-client'].includes(data.k) || typeof data.s !== 'string' || !(data.e > now)) return null;
     if (this.revokedTokens.has(data.j)) return null;
     const notBefore = this.notBefore(data.k, data.s);
     if (notBefore !== undefined && data.t < notBefore) return null;

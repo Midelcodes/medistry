@@ -87,6 +87,26 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
   admin records a minor's parent or guardian, who manages the account until the patient's 18th birthday (from the
   encrypted date of birth); control then passes to the patient and both are notified.
 
+## Records without double entry
+
+- **From existing EMRs (FHIR import).** A facility admin creates an API client
+  (`POST /api/admin/facility-api-clients`, the secret is shown once). The EMR gets a short-lived token at
+  `POST /api/fhir/token` (client credentials) and pushes a FHIR R4 Bundle (transaction or collection) to
+  `POST /api/fhir/import`. Supported: Encounter, Condition, AllergyIntolerance, MedicationStatement, Observation,
+  DiagnosticReport, DocumentReference (Patient and Practitioner entries are used for matching only). All or nothing:
+  any invalid entry rejects the whole bundle with an OperationOutcome. Patients are never created: a Patient entry
+  must match by the Medistry patient id (`urn:medistry:patient-id`) or a facility identifier learnt from an earlier
+  matched import, and the facility must already be connected to the patient. Records from a verified author at the
+  facility are final; otherwise they are drafts a doctor must sign. Re-imports are idempotent (facility + identifier).
+- **OpenMRS / KenyaEMR.** `OpenMrsConnector` pulls a patient's records through the OpenMRS FHIR module
+  (`/ws/fhir2/R4/...`, `_lastUpdated` for incremental pulls) and feeds the same import pipeline. Site-specific
+  mapping (encounter classes, concept codes, providers) is configuration with TODOs.
+- **From paper (AI intake).** In the clinician console, "Intake from paper": paste text, take a photo or record a
+  voice note. The assistant proposes draft records; each value shows the words it came from, and uncertain values are
+  flagged. The doctor edits, discards or signs (one tap signs all). Nothing is signed by the assistant. The default
+  model is a deterministic local stand-in; real models and OCR/speech-to-text providers are pluggable (see
+  docs/DEPLOYMENT.md for the rules on real patient data).
+
 ## SMS and USSD (feature phones)
 
 - **SMS.** `SMS_PROVIDER=africastalking` sends SMS through Africa's Talking (`AT_USERNAME`, `AT_API_KEY`,

@@ -73,6 +73,29 @@ function stripPng(buf: Buffer): Buffer {
   return Buffer.concat(out);
 }
 
+/** Voice notes for AI intake (Phase 15): the formats browsers record (MediaRecorder) and common phone formats. */
+export type SafeAudioType = 'audio/webm' | 'audio/ogg' | 'audio/wav' | 'audio/mp4' | 'audio/mpeg';
+
+/** Audio type from magic bytes: WebM (EBML), Ogg, WAV (RIFF/WAVE), MP4/M4A (ftyp box), MP3 (ID3 tag or frame sync). */
+export function detectAudioType(buf: Buffer): SafeAudioType | null {
+  if (buf.length >= 4 && buf.readUInt32BE(0) === 0x1a45dfa3) return 'audio/webm';
+  if (buf.length >= 4 && buf.subarray(0, 4).toString('latin1') === 'OggS') return 'audio/ogg';
+  if (buf.length >= 12 && buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WAVE') return 'audio/wav';
+  if (buf.length >= 8 && buf.subarray(4, 8).toString('latin1') === 'ftyp') return 'audio/mp4';
+  if (buf.length >= 3 && (buf.subarray(0, 3).toString('latin1') === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0))) return 'audio/mpeg';
+  return null;
+}
+
+/** The bytes must be one of the accepted audio formats and match the declared type (codec parameters ignored). */
+export function assertSafeAudioType(buf: Buffer, declaredMime: string): SafeAudioType {
+  const detected = detectAudioType(buf);
+  if (!detected) throw new Error('Audio content is not WebM, Ogg, WAV, MP4 or MP3. Upload rejected.');
+  const declared = String(declaredMime || '').toLowerCase().split(';')[0].trim();
+  const aliases: Record<string, SafeAudioType> = { 'audio/x-wav': 'audio/wav', 'audio/wave': 'audio/wav', 'audio/m4a': 'audio/mp4', 'audio/x-m4a': 'audio/mp4', 'audio/mp3': 'audio/mpeg', 'video/webm': 'audio/webm' };
+  if ((aliases[declared] || declared) !== detected) throw new Error(`Audio content (${detected}) does not match the declared type. Upload rejected.`);
+  return detected;
+}
+
 /** Removes image metadata (location, device, names in comments). PDFs are returned unchanged. */
 export function stripImageMetadata(buf: Buffer, type: SafeFileType): Buffer {
   if (type === 'image/jpeg') return stripJpeg(buf);
