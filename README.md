@@ -58,6 +58,26 @@
 `mcp/` contains an MCP server that connects Medistry's audited break-glass summary to SATS/TEWS triage,
 queue management and in-country referral routing, plus a LangGraph demo. See [`mcp/README.md`](mcp/README.md).
 
+### Triage board
+
+The agent's result reaches the care team. After the handover, the `post_triage_to_board` MCP tool posts the
+result against the active break-glass grant the same clinician session opened
+(`POST /api/emergency/grants/:grantId/triage`). The clinician console's **Triage board** tab
+(`/clinicians/triage`) then shows the facility's patients, most urgent first:
+
+- **Colour and TEWS:** a colour band, always with the word (RED, ORANGE, YELLOW, GREEN), the score and the target time.
+- **Reasons:** a "Why RED?" panel listing each observation's points.
+- **Deterioration:** a **Deteriorating** badge when the score rises.
+- **Referral:** the suggested facilities, with **Accept referral**. Acceptance is audited, and the patient sees in the portal where they were referred.
+- **Handover:** the written handover note.
+
+Triage results are decision support, stored beside the record and never written into the clinical record or the
+emergency card. The board shows a pseudonymous reference and minimised essentials only, with no names, contacts or codes.
+
+Demo:
+1. Run `npm run demo` in `mcp/` (with `MEDISTRY_URL`, `MEDISTRY_ALLOWED_HOSTS` and `MEDISTRY_DEMO=1` set for a remote demo server).
+2. Run `npm run demo:deteriorate` to re-triage the same patient with worse observations.
+
 ---
 
 ## Sign-in

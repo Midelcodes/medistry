@@ -55,7 +55,14 @@
   }
 
   // ---- Access log ----
+  async function loadReferrals() {
+    // Where a clinician referred you after emergency triage (no scores, just the hospital, who and when).
+    const { referrals } = await api(`${base()}/referrals`, { auth: false, token: patientToken });
+    $('#referrals-box').hidden = !referrals.length;
+    $('#referrals-list').innerHTML = referrals.map((r) => `<li>Referred to <strong>${esc(r.facilityName)}</strong> by ${esc(r.acceptedByName)} on ${esc(fmtDate(r.acceptedAt, true))}</li>`).join('');
+  }
   async function loadAccess() {
+    loadReferrals().catch(() => { $('#referrals-box').hidden = true; });
     const { logs } = await api(`${base()}/access-log`, { auth: false, token: patientToken });
     const body = $('#access-table tbody');
     if (!logs.length) {

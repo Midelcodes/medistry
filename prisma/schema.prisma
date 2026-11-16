@@ -815,3 +815,16 @@ model AuditLog {
   @@index([subjectId, sequenceNumber])
   @@index([actorId, sequenceNumber])
 }
+
+// Triage board: results of the triage agent, kept as decision support beside the record (never a clinical record).
+// The full result (colour, TEWS factors, minimised essentials, referral options, handover, accepted referral) is JSON.
+model TriageResult {
+  id         String   @id
+  patientId  String
+  facilityId String
+  createdAt  DateTime
+  data       Json
+
+  @@index([facilityId, createdAt])
+  @@index([patientId])
+}

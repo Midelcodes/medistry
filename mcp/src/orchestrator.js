@@ -2,7 +2,10 @@
 // Orchestrator: LangGraph (open-source) state graph that drives
 //   1. OUR MCP server (src/server.js): Medistry emergency summary or offline card, triage, queue, routing
 //   2. EXTERNAL MCP server (@modelcontextprotocol/server-filesystem, not built by us): writes the handover report
-// Scenario: an unconscious patient is identified -> critical history -> triage -> referral -> handover.
+// Scenario: an unconscious patient is identified -> critical history -> triage -> referral -> handover
+//   -> triage board (the result appears on the Medistry clinician triage board, decision support only).
+// `npm run demo:deteriorate` re-triages the same patient with worse observations and runs flag_deterioration,
+// so the board shows the Deteriorating badge.
 //   - Emergency code (default): get_emergency_summary, an audited break-glass in Medistry.
 //   - Offline card token or link (argv[2] or MEDISTRY_CARD): verify_offline_card, checked locally.
 // Needs a running Medistry (default http://localhost:3000, demo mode). No LLM and no internet needed.
@@ -45,6 +48,9 @@ const HOME = "NG-LAG-003";
 // Synthetic observations for the unconscious patient on arrival
 const VITALS = { mobility: "with_help", respiratoryRate: 26, heartRate: 118, systolicBP: 98, temperatureC: 38.7, avpu: "voice", trauma: false };
 const SIGNS = ["severe_pain", "reduced_consciousness"];
+// Synthetic observations 20 minutes later, for the deterioration scenario
+const WORSE_VITALS = { mobility: "immobile", respiratoryRate: 32, heartRate: 134, systolicBP: 84, temperatureC: 39.2, avpu: "pain", trauma: false };
+const FACTOR_VALUE = (v, name) => String(name === "temperature" ? `${v.temperatureC} C` : v[name] ?? "");
 // Offline cards carry no date of birth. The adult scale (age >= 12) is used once the clinician judges the
 // patient to be an adult; this value only satisfies that check and is never reported as the patient's age.
 const ADULT_SCALE_AGE = 18;
@@ -54,11 +60,15 @@ const State = Annotation.Root({
   triage: Annotation({ reducer: (_, b) => b, default: () => null }),
   referral: Annotation({ reducer: (_, b) => b, default: () => [] }),
   report: Annotation({ reducer: (_, b) => b, default: () => "" }),
+  deterioration: Annotation({ reducer: (_, b) => b, default: () => null }),
+  board: Annotation({ reducer: (_, b) => b, default: () => null }),
 });
 
 /** Builds and runs the graph. input: an emergency code, or an offline card token / link. */
-export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
+export async function runScenario({ input, triageMcp, fsMcp, outDir, scenario = process.env.MEDISTRY_SCENARIO || "arrival" }) {
   const card = isCardInput(input);
+  const deteriorate = scenario === "deteriorate";
+  const vitals = deteriorate ? WORSE_VITALS : VITALS;
 
   async function scanNode() {
     if (card) {
@@ -72,9 +82,11 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
   async function triageNode({ summary }) {
     const age = summary.source === "card" ? ADULT_SCALE_AGE : summary.age;
     const ref = summary.source === "card" ? (summary.cardRef || "CARD-UNVERIFIED") : summary.patientRef;
-    const t = await call(triageMcp, "score_triage_priority", { age, ...VITALS, signs: SIGNS });
+    const t = await call(triageMcp, "score_triage_priority", { age, ...vitals, signs: SIGNS });
     await call(triageMcp, "queue_add_patient", { facilityId: HOME, patientId: ref, category: t.category });
-    return { triage: t };
+    // Re-assessment: compare the arrival observations with the new ones.
+    const deterioration = deteriorate ? await call(triageMcp, "flag_deterioration", { observations: [VITALS, WORSE_VITALS] }) : null;
+    return { triage: t, deterioration };
   }
 
   async function routeNode({ summary, triage }) {
@@ -87,7 +99,7 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
     return { referral: ref.recommendations };
   }
 
-  async function handoverNode({ summary, triage, referral }) {
+  async function handoverNode({ summary, triage, referral, deterioration }) {
     const L = ["# Emergency handover (SYNTHETIC DEMO DATA)", "", ...reportBannerLines()];
     if (summary.source === "card") {
       if (summary.verified) {
@@ -113,6 +125,9 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
       if (summary.activeMedications.length) L.push(`Current medications: ${summary.activeMedications.map((m) => `${m.name} ${m.dose}`).join("; ")}`);
     }
     L.push("", "## Triage", `${triage.category} (TEWS ${triage.tews}). ${triage.reasons.join("; ")}`, `Target time to clinician: ${triage.targetMinutes} min`);
+    if (deterioration) {
+      L.push("", "## Deterioration", deterioration.deteriorating ? `DETERIORATING. ${deterioration.flags.join("; ")}` : "No deterioration flagged.", deterioration.action);
+    }
     L.push("", "## Referral options");
     for (const r of referral) L.push(`- ${r.name} (${r.distanceKm} km, ${r.level}, ICU beds free: ${r.icuBedsFree})`);
     if (summary.source === "code") {
@@ -126,9 +141,30 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
     return { report };
   }
 
+  // Shows the result on the Medistry clinician triage board, through our MCP server. Needs the break-glass grant
+  // (code path). A failure is reported but never stops the handover, which is already written.
+  async function boardNode({ summary, triage, referral, report, deterioration }) {
+    if (summary.source !== "code") return { board: { posted: false, note: "Offline card read locally: nothing posted to the triage board." } };
+    try {
+      const factors = Object.entries(triage.tewsBreakdown || {}).map(([name, points]) => ({ name, value: FACTOR_VALUE(vitals, name), points }));
+      const posted = await call(triageMcp, "post_triage_to_board", {
+        grantId: summary.grant.id, patientRef: summary.patientRef, colour: triage.category, tews: triage.tews, factors, reasons: triage.reasons,
+        essentials: { age: summary.age, gender: summary.gender, bloodGroup: summary.bloodGroup, genotype: summary.genotype, alerts: summary.alerts },
+        referralOptions: referral.map((r) => ({ facilityId: r.facilityId, name: r.name, distanceKm: r.distanceKm, level: r.level, icuBedsFree: r.icuBedsFree })),
+        handoverText: report,
+        deterioration: deterioration ? { deteriorating: deterioration.deteriorating, flags: deterioration.flags } : null,
+      });
+      return { board: { posted: true, ...posted } };
+    } catch (e) {
+      return { board: { posted: false, note: `Not posted to the triage board: ${e.message}` } };
+    }
+  }
+
   const graph = new StateGraph(State)
     .addNode("scan_step", scanNode).addNode("triage_step", triageNode).addNode("route_step", routeNode).addNode("handover_step", handoverNode)
-    .addEdge(START, "scan_step").addEdge("scan_step", "triage_step").addEdge("triage_step", "route_step").addEdge("route_step", "handover_step").addEdge("handover_step", END)
+    .addNode("board_step", boardNode)
+    .addEdge(START, "scan_step").addEdge("scan_step", "triage_step").addEdge("triage_step", "route_step").addEdge("route_step", "handover_step")
+    .addEdge("handover_step", "board_step").addEdge("board_step", END)
     .compile();
   return graph.invoke({});
 }
@@ -146,10 +182,14 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   const { triageMcp, fsMcp } = await connectServers(OUT);
   try {
-    const input = process.argv[2] || process.env.MEDISTRY_CARD || await demoCode();
-    const final = await runScenario({ input, triageMcp, fsMcp, outDir: OUT });
+    const args = process.argv.slice(2);
+    const scenario = args.includes("--deteriorate") ? "deteriorate" : (process.env.MEDISTRY_SCENARIO || "arrival");
+    const input = args.find((a) => !a.startsWith("--")) || process.env.MEDISTRY_CARD || await demoCode();
+    const final = await runScenario({ input, triageMcp, fsMcp, outDir: OUT, scenario });
     console.log(final.report);
     console.log(`\nWritten via external filesystem MCP server -> ${OUT}/handover.md`);
+    if (final.board?.posted) console.log(`Posted to the Medistry triage board (${final.board.colour}, TEWS ${final.board.tews}) -> ${final.board.boardUrl}`);
+    else if (final.board?.note) console.log(final.board.note);
   } finally {
     await triageMcp.close(); await fsMcp.close();
   }

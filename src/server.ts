@@ -63,7 +63,7 @@ log('info', 'startup', {
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
   accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility,
-  billing, onboarding, anomalyAgent } = runtime;
+  billing, onboarding, anomalyAgent, triageBoard } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -83,6 +83,7 @@ const handlePortalApi = createPortalApi({
   notifications: consoleProvider,
   offlineCards: offlineCardStore,
   recordFlags,
+  triageBoard,
   offlineScans,
   persistence,
   dataDir: path.join(ROOT_DIR, 'data'),
@@ -143,6 +144,8 @@ const PAGES: Record<string, PageDef> = {
   '/patients': { file: 'patients', nav: 'patients', title: 'Patient Portal | Medistry', description: 'View your record timeline, approve or revoke access, see who accessed your record, and manage your emergency code.', script: 'patients' },
   // Microphone for voice-note intake (Phase 15); photos use the file picker, which needs no camera permission.
   '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians', permissions: 'camera=(), microphone=(self), geolocation=(), payment=()' },
+  // Same console, opened on the Triage board tab.
+  '/clinicians/triage': { file: 'clinicians', nav: 'clinicians', title: 'Triage Board | Medistry', description: 'Patients triaged by the Medistry triage agent, most urgent first: colour, score, reasons, deterioration and referral.', script: 'clinicians', permissions: 'camera=(), microphone=(self), geolocation=(), payment=()' },
   '/facilities': { file: 'facilities', nav: 'facilities', title: 'Facilities | Medistry', description: 'Accredited facilities and verified clinicians on Medistry.', script: 'facilities' },
   '/facility-admin': { file: 'facility-admin', nav: '', title: 'Facility Admin | Medistry', description: 'Run your facility on Medistry: staff, integrations, usage and billing.', script: 'facility-admin' },
   '/status': { file: 'status', nav: '', title: 'Platform Status | Medistry', description: 'Live health of this Medistry environment.', script: 'status' },
