@@ -79,3 +79,13 @@ export async function emergencySummary({ code, reason }) {
     ],
   };
 }
+
+// Posts the agent's triage result to the clinician triage board, against the active break-glass grant the
+// same clinician session opened (Medistry checks the grant is theirs and still active). Decision support only:
+// Medistry stores it beside the record, never as a clinical record. Only minimised data is sent.
+export async function postTriageResult({ grantId, result }) {
+  assertAllowedHost();
+  const token = await signIn();
+  const r = await api(`/api/emergency/grants/${encodeURIComponent(grantId)}/triage`, { method: "POST", token, body: result });
+  return { ...r, boardUrl: BASE + (r.boardUrl || "/clinicians/triage") };
+}

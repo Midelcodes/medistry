@@ -2,7 +2,8 @@
 // Medistry triage MCP server (team-built). Stdio transport.
 // Tools: score_triage_priority, flag_deterioration, queue_add_patient, queue_get, queue_call_next,
 //        route_referral, get_emergency_summary (reads Medistry through its audited break-glass API),
-//        verify_offline_card (verifies a signed offline card locally; only the public keys are fetched).
+//        verify_offline_card (verifies a signed offline card locally; only the public keys are fetched),
+//        post_triage_to_board (shows the triage result on the Medistry clinician triage board).
 // Data residency: the only network call is to MEDISTRY_URL, and only to hosts in MEDISTRY_ALLOWED_HOSTS
 // (default localhost). Queues are in-process memory and use pseudonymous patient references.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,7 +11,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_SIGNS } from "./tews.js";
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
-import { emergencySummary } from "./medistry-client.js";
+import { emergencySummary, postTriageResult } from "./medistry-client.js";
 import { verifyOfflineCard } from "./offline-card.js";
 import { startupBanner, withValidationBanner } from "./validation.js";
 
@@ -143,6 +144,33 @@ server.registerTool("verify_offline_card", {
   inputSchema: { token: z.string().min(20).max(6000).describe("Card token or the card link ${APP_URL}/s#<token>") },
 }, async ({ token }) => {
   try { return ok(await verifyOfflineCard(token)); }
+  catch (e) { return err(e.message); }
+});
+
+server.registerTool("post_triage_to_board", {
+  title: "Post the triage result to the Medistry triage board",
+  description: "Shows a triage result on the Medistry clinician triage board (decision support, never a clinical record) so the care team sees the colour, TEWS, reasons, deterioration, referral options and handover. Needs the grantId of the active break-glass grant from get_emergency_summary. Send only minimised data: no names, contacts or emergency codes.",
+  inputSchema: {
+    grantId: z.string().min(8).describe("grant.id returned by get_emergency_summary"),
+    patientRef: z.string().max(40).describe("Pseudonymous reference, e.g. PT-8f8da317"),
+    colour: z.enum(["RED", "ORANGE", "YELLOW", "GREEN"]),
+    tews: z.number().int().min(0).max(20),
+    factors: z.array(z.object({ name: z.string().max(40), value: z.string().max(40), points: z.number().int().min(0).max(10) })).max(12).default([]),
+    reasons: z.array(z.string().max(200)).max(10).default([]),
+    essentials: z.object({
+      age: z.number().int().min(0).max(130).nullable().optional(), gender: z.string().max(20).nullable().optional(),
+      bloodGroup: z.string().max(20).nullable().optional(), genotype: z.string().max(10).nullable().optional(),
+      alerts: z.array(z.string().max(200)).max(10).default([]),
+    }).default({ alerts: [] }),
+    referralOptions: z.array(z.object({
+      facilityId: z.string().max(60), name: z.string().max(120), distanceKm: z.number().min(0).max(5000), level: z.string().max(40), icuBedsFree: z.number().int().min(0).max(1000),
+    })).max(5).default([]),
+    handoverText: z.string().max(8000).default(""),
+    deterioration: z.object({ deteriorating: z.boolean(), flags: z.array(z.string().max(200)).max(10) }).nullable().optional(),
+    agentRunId: z.string().max(80).optional(),
+  },
+}, async ({ grantId, ...result }) => {
+  try { return ok(await postTriageResult({ grantId, result })); }
   catch (e) { return err(e.message); }
 });
 

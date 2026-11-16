@@ -7,6 +7,7 @@
   "scripts": {
     "server": "node src/server.js",
     "demo": "node src/orchestrator.js",
+    "demo:deteriorate": "node src/orchestrator.js --deteriorate",
     "test": "node --test test/*.test.js",
     "agent": "node src/agent.js"
   },

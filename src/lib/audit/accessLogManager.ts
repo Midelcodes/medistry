@@ -77,6 +77,8 @@ export class PatientAccessLogManager {
   }
 
   private formatActionDescription(action: string, resourceType?: string): string {
+    if (action === 'TRIAGE_RESULT_RECORDED') return '🩺 Emergency triage recorded (decision support)';
+    if (action === 'REFERRAL_ACCEPTED') return '🏥 Referral accepted by the treating clinician';
     if (action === 'OFFLINE_EMERGENCY_SCAN') return '🚨 Offline Emergency Card Scan (break-glass)';
     if (action.includes('EMERGENCY_BREAK_GLASS')) return '🚨 Emergency Break-Glass Scan & Critical Summary View';
     if (action.includes('CLINICAL_RECORD_WRITE')) return `✍️ Authored New ${resourceType || 'Clinical'} Record`;

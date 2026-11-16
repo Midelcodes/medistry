@@ -52,6 +52,7 @@ import { evaluatePolicy, type ActorContext } from '../policy/enforcer.ts';
 import type { OfflineCardStore } from '../emergency/offlineCardStore.ts';
 import type { OfflineScanService } from '../emergency/offlineScans.ts';
 import type { RecordFlagStore } from '../clinical/recordFlags.ts';
+import { TriageValidationError, type TriageBoardStore } from '../emergency/triageBoard.ts';
 import type { Persistence } from '../data/repositories.ts';
 import { validateCardSelection, type CardDiagnosis } from '../emergency/cardPayload.ts';
 
@@ -70,6 +71,8 @@ export interface PortalContext {
   offlineCards: OfflineCardStore;
   offlineScans: OfflineScanService;
   recordFlags: RecordFlagStore;
+  // Triage agent results shown on the clinician triage board (decision support only)
+  triageBoard?: TriageBoardStore;
   persistence?: Persistence;
   dataDir: string;
   // Sign-in (Phase 12)
@@ -132,6 +135,7 @@ export function createPortalApi(ctx: PortalContext) {
   const exchangeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 }); // national exchange queries
   const facilityRegisterLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 60_000, maxRequests: 3 }); // facility applications
   const inviteLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 10 });  // invitation acceptance
+  const triageLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 });  // triage results and referral acceptance
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
   // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
@@ -576,6 +580,9 @@ export function createPortalApi(ctx: PortalContext) {
     viewer: UserAccount | null, acting: ProxyActing | null): Promise<unknown | undefined> {
     let m: RegExpMatchArray | null;
     if (method === 'GET' && sub === '') return { patient: profileOf(patient), actingAs: acting ? { proxyUserId: acting.proxyUserId, relationship: acting.relationship } : null };
+    // Referrals a clinician accepted from the triage agent's suggestions. Patients see where they were referred,
+    // by whom and when; never the triage score or the handover.
+    if (method === 'GET' && sub === 'referrals') return { referrals: ctx.triageBoard ? ctx.triageBoard.referralsForPatient(patient.id) : [] };
 
     // Proxies: list, invite (the patient, or a minor's managing guardian), revoke.
     if (sub === 'proxies' || sub.startsWith('proxies/')) {
@@ -1000,6 +1007,54 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'GET' && pathname === '/api/clinician/me') return { clinician: publicClinician(clinician) };
     // Everything below is clinical (records, consent, emergency grants, offline passes): verified clinicians only.
     requireVerified(clinician);
+
+    // ---------- Triage board: results of the triage agent (decision support only) ----------
+    // Posted against an active break-glass grant the clinician owns: the patient is identified by the grant, the
+    // access is already audited and the patient already notified. Never written to the clinical record or the card.
+    if (method === 'POST' && (m = pathname.match(/^\/api\/emergency\/grants\/([^/]+)\/triage$/))) {
+      limit(triageLimiter, req);
+      if (!ctx.triageBoard) throw new HttpError(503, 'Triage board is not available');
+      const grant = ctx.emergencyEngine.getGrant(decodeURIComponent(m[1]));
+      if (!grant || new Date(grant.expiresAt).getTime() < Date.now()) throw new HttpError(404, 'Emergency grant not found or expired');
+      if (grant.clinicianId !== clinician.id && grant.coSignClinicianId !== clinician.id) throw new HttpError(403, 'This grant belongs to another clinician');
+      const info = requestInfo(req);
+      try {
+        const result = ctx.triageBoard.create({
+          patientId: grant.patientId, facilityId: clinician.facilityId, clinicianId: clinician.id, clinicianUserId: clinician.userId,
+          grantId: grant.id, payload: await readBody(req, 64 * 1024), ipAddress: info.ipAddress, userAgent: info.userAgent,
+        });
+        return { triageResultId: result.id, colour: result.colour, tews: result.tews, boardUrl: '/clinicians/triage' };
+      } catch (err: any) {
+        if (err instanceof TriageValidationError) throw new HttpError(400, err.message);
+        throw err;
+      }
+    }
+    if (method === 'GET' && pathname === '/api/clinician/triage/board') {
+      limit(triageLimiter, req);
+      if (!ctx.triageBoard) throw new HttpError(503, 'Triage board is not available');
+      const rows = ctx.triageBoard.board(clinician.facilityId);
+      return {
+        facilityId: clinician.facilityId,
+        facilityName: facilityName(clinician.facilityId),
+        disclaimer: 'Decision support only. Triage scoring is not clinically validated. The clinician makes every decision.',
+        generatedAt: new Date().toISOString(),
+        // Pseudonymous reference and minimised essentials only; no names, contacts or emergency codes.
+        patients: rows.map(({ patientId: _p, grantId: _g, ...r }) => r),
+      };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/clinician\/triage\/([^/]+)\/accept-referral$/))) {
+      limit(triageLimiter, req);
+      if (!ctx.triageBoard) throw new HttpError(503, 'Triage board is not available');
+      const body = await readBody(req);
+      try {
+        const r = ctx.triageBoard.acceptReferral(decodeURIComponent(m[1]), String(body.facilityId || ''),
+          { clinicianId: clinician.id, userId: clinician.userId, name: clinician.fullName, facilityId: clinician.facilityId }, requestInfo(req));
+        return { id: r.id, acceptedReferral: r.acceptedReferral };
+      } catch (err: any) {
+        if (err instanceof TriageValidationError) throw new HttpError(err.message === 'Triage result not found' ? 404 : 400, err.message);
+        throw err;
+      }
+    }
 
     // ---------- Drafts and AI intake (Phase 15): all need the patient's active consent ----------
     const consentFor = (patientId: string) => {

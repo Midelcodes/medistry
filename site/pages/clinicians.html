@@ -47,6 +47,7 @@
             <button class="tab" role="tab" data-tab="records" aria-selected="false">My patients</button>
             <button class="tab" role="tab" data-tab="emergency" aria-selected="false">Emergency grants</button>
             <button class="tab" role="tab" data-tab="intake" aria-selected="false">Intake from paper</button>
+            <button class="tab" role="tab" data-tab="triage" aria-selected="false">Triage board</button>
           </div>
 
           <div class="tab-panel" id="cl-tab-lookup" role="tabpanel">
@@ -118,6 +119,20 @@
               <ol class="timeline" id="fh-timeline"></ol>
             </div>
           </div>
+          <div class="tab-panel" id="cl-tab-triage" role="tabpanel" hidden>
+            <div class="panel">
+              <div class="triage-head">
+                <div>
+                  <h2 class="panel-title">Triage board</h2>
+                  <p class="panel-sub" id="triage-facility">Patients triaged by the Medistry triage agent at your facility, most urgent first. Updates every 5 seconds.</p>
+                </div>
+                <span class="badge grey" id="triage-updated" aria-live="polite"></span>
+              </div>
+              <p class="triage-disclaimer" role="note">Decision support only. Triage scoring is not clinically validated. You make every clinical decision.</p>
+              <div id="triage-list" class="triage-list" aria-live="polite"></div>
+            </div>
+          </div>
+
           <div class="tab-panel" id="cl-tab-intake" role="tabpanel" hidden>
             <div id="intake-start">
               <h2 class="panel-title">Intake from paper or voice</h2>

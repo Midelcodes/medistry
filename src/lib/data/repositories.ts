@@ -37,6 +37,7 @@ import type { OutboxMessage, OutboxRepo } from '../integrations/hie/nationalExch
 import type { FacilityApplication, StaffInvite } from '../facilities/onboarding.ts';
 import type { Subscription, SubscriptionRepo } from '../billing/billingService.ts';
 import type { AnomalyFlag, AnomalyRepo } from '../audit/anomalyAgent.ts';
+import type { TriageResult, TriageRepo } from '../emergency/triageBoard.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -115,12 +116,14 @@ export interface Snapshot {
   staffInvites?: StaffInvite[];
   subscriptions?: Subscription[];
   anomalyFlags?: AnomalyFlag[];
+  // Triage board (decision support from the triage agent)
+  triageResults?: TriageResult[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
   ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
   AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo,
-  IdentifierRepo, OutboxRepo, SubscriptionRepo, AnomalyRepo {
+  IdentifierRepo, OutboxRepo, SubscriptionRepo, AnomalyRepo, TriageRepo {
   saveFacilityApplication(a: FacilityApplication): void;
   saveStaffInvite(i: StaffInvite): void;
   saveDuplicateReview(r: DuplicateReview): void;

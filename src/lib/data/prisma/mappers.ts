@@ -32,6 +32,7 @@ import type { OutboxMessage } from '../../integrations/hie/nationalExchange.ts';
 import type { FacilityApplication, StaffInvite } from '../../facilities/onboarding.ts';
 import type { Subscription } from '../../billing/billingService.ts';
 import type { AnomalyFlag } from '../../audit/anomalyAgent.ts';
+import type { TriageResult } from '../../emergency/triageBoard.ts';
 
 type Row = Record<string, any>;
 
@@ -417,3 +418,8 @@ export const notificationToRow = (n: NotificationEntity, createdAt = new Date())
 export const rowToNotification = (r: Row): NotificationEntity => clean({
   channel: r.channel, to: decryptField(r.encryptedRecipient), title: dec(r.encryptedTitle), body: decryptField(r.encryptedBody),
 });
+
+export const triageResultToRow = (r: TriageResult): Row => ({
+  id: r.id, patientId: r.patientId, facilityId: r.facilityId, createdAt: new Date(r.createdAt), data: JSON.parse(JSON.stringify(r)),
+});
+export const rowToTriageResult = (r: Row): TriageResult => ({ ...(r.data as TriageResult), id: r.id, patientId: r.patientId, facilityId: r.facilityId });

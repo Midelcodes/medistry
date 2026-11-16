@@ -14,18 +14,105 @@
       const c = session.clinician;
       $('#cl-name').textContent = c.fullName;
       $('#cl-meta').textContent = `${c.specialty} • ${c.facilityName} • ${c.licenseNumber}`;
-      loadTab(activeTab);
+      selectTab(activeTab);
+    } else {
+      stopTriagePolling();
     }
   }
 
-  let activeTab = 'lookup';
+  // /clinicians/triage opens the console on the Triage board tab.
+  let activeTab = location.pathname.replace(/\/$/, '') === '/clinicians/triage' ? 'triage' : 'lookup';
   const loaders = {
     lookup: loadDemoPatients,
     records: loadMyGrants,
     emergency: loadEmergencyGrants,
+    triage: loadTriage,
   };
-  function loadTab(name) { if (loaders[name]) loaders[name]().catch(fail); }
-  initTabs($('#cl-app'), 'cl-tab-', (name) => { activeTab = name; if (!$('#cl-app').hidden) loadTab(name); });
+  function loadTab(name) {
+    if (name !== 'triage') stopTriagePolling();
+    if (loaders[name]) loaders[name]().catch(fail);
+  }
+  const selectTab = initTabs($('#cl-app'), 'cl-tab-', (name) => { activeTab = name; if (!$('#cl-app').hidden) loadTab(name); });
+
+  // ---- Triage board: results posted by the Medistry triage agent (decision support only) ----
+  const COLOUR_LABEL = { RED: 'Emergency', ORANGE: 'Very urgent', YELLOW: 'Urgent', GREEN: 'Routine' };
+  const FACTOR_LABEL = { mobility: 'Mobility', respiratoryRate: 'Respiratory rate', heartRate: 'Heart rate', systolicBP: 'Systolic BP', temperature: 'Temperature', avpu: 'Consciousness (AVPU)', trauma: 'Trauma' };
+  let triageTimer = null;
+  let triageSeen = new Set();
+  const triageOpen = new Set(); // <details> the clinician opened, kept open across refreshes
+  function stopTriagePolling() { if (triageTimer) { clearInterval(triageTimer); triageTimer = null; } }
+  async function loadTriage() {
+    await refreshTriage();
+    stopTriagePolling();
+    triageTimer = setInterval(() => {
+      if (activeTab !== 'triage' || $('#cl-app').hidden || document.hidden) return;
+      refreshTriage().catch(() => {});
+    }, 5000);
+  }
+  function dueText(row, now) {
+    const dueAt = new Date(row.createdAt).getTime() + row.targetMinutes * 60000;
+    const mins = Math.round((dueAt - now) / 60000);
+    if (row.targetMinutes === 0) return { text: 'See immediately', overdue: true };
+    if (mins < 0) return { text: `Overdue by ${-mins} min`, overdue: true };
+    return { text: `See within ${mins} min`, overdue: false };
+  }
+  function triageCard(r, now) {
+    const due = dueText(r, now);
+    const e = r.essentials || {};
+    const who = [e.age != null ? `${e.age}y` : null, e.gender, e.bloodGroup ? `Blood ${e.bloodGroup}` : null, e.genotype ? `Genotype ${e.genotype}` : null].filter(Boolean).join(' · ');
+    const factors = (r.factors || []).filter((f) => f.points > 0)
+      .map((f) => `<li>${esc(FACTOR_LABEL[f.name] || f.name)}${f.value ? `: ${esc(f.value)}` : ''} <strong>+${esc(f.points)}</strong></li>`).join('');
+    const reasons = (r.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('');
+    const det = r.deteriorating
+      ? `<span class="badge deteriorating">Deteriorating${r.previousTews != null ? `: TEWS ${esc(r.previousTews)} to ${esc(r.tews)}` : ''}</span>` : '';
+    const refs = (r.referralOptions || []).map((o) => {
+      const accepted = r.acceptedReferral && r.acceptedReferral.facilityId === o.facilityId;
+      const btn = r.acceptedReferral
+        ? (accepted ? `<span class="badge green">Accepted by ${esc(r.acceptedReferral.acceptedByName)}</span>` : '')
+        : `<button type="button" class="btn btn-secondary-pill" data-accept="${esc(r.id)}" data-facility="${esc(o.facilityId)}"><span>Accept referral</span></button>`;
+      return `<div class="triage-ref-opt${accepted ? ' accepted' : ''}"><div><strong>${esc(o.name)}</strong><div class="triage-meta">${esc(o.distanceKm)} km · ${esc(o.level)} · ICU beds free: ${esc(o.icuBedsFree)}</div></div>${btn}</div>`;
+    }).join('') || '<p class="triage-meta">No referral suggested.</p>';
+    const open = (k) => (triageOpen.has(`${r.id}:${k}`) ? ' open' : '');
+    return `<article class="triage-card${triageSeen.has(r.id) ? '' : ' new'}" aria-label="${esc(r.patientRef)}: ${esc(r.colour)}, TEWS ${esc(r.tews)}">
+      <div class="triage-band ${esc(r.colour)}"><span class="tb-colour">${esc(r.colour)}</span><span class="tb-label">${esc(COLOUR_LABEL[r.colour] || '')}</span><span class="tb-tews">TEWS ${esc(r.tews)}</span></div>
+      <div class="triage-body">
+        <div class="triage-row"><span class="triage-ref">${esc(r.patientRef)}</span><span class="triage-meta">${esc(who)}</span>${det}</div>
+        <div class="triage-row"><span class="triage-due${due.overdue ? ' overdue' : ''}">${esc(due.text)}</span><span class="triage-meta">Triaged ${esc(fmtDate(r.createdAt, true))}</span></div>
+        ${(e.alerts || []).length ? `<ul class="triage-alerts">${e.alerts.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+        <details data-k="${esc(r.id)}:why"${open('why')}><summary>Why ${esc(r.colour)}?</summary>
+          ${factors ? `<ul class="triage-factors">${factors}</ul>` : ''}${reasons ? `<ul class="triage-factors">${reasons}</ul>` : ''}
+          ${r.deterioration && r.deterioration.flags && r.deterioration.flags.length ? `<ul class="triage-factors">${r.deterioration.flags.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+        </details>
+        <details data-k="${esc(r.id)}:ref"${open('ref') || (r.acceptedReferral ? '' : ' open')}><summary>Referral${r.acceptedReferral ? `: ${esc(r.acceptedReferral.name)}` : ' options'}</summary><div class="triage-refs">${refs}</div></details>
+        <details data-k="${esc(r.id)}:handover"${open('handover')}><summary>View handover</summary><pre class="triage-handover">${esc(r.handoverText || 'No handover text.')}</pre></details>
+      </div>
+    </article>`;
+  }
+  async function refreshTriage() {
+    const data = await api('/api/clinician/triage/board');
+    const now = Date.now();
+    $('#triage-facility').textContent = `Patients triaged by the Medistry triage agent at ${data.facilityName}, most urgent first. Updates every 5 seconds.`;
+    $('#triage-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    $('#triage-list').innerHTML = data.patients.length
+      ? data.patients.map((r) => triageCard(r, now)).join('')
+      : '<div class="triage-empty">No patients triaged yet. Run the triage agent (npm run demo in /mcp) and they appear here within seconds.</div>';
+    triageSeen = new Set(data.patients.map((r) => r.id));
+  }
+  $('#triage-list').addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d.tagName !== 'DETAILS' || !d.dataset.k) return;
+    if (d.open) triageOpen.add(d.dataset.k); else triageOpen.delete(d.dataset.k);
+  }, true);
+  $('#triage-list').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-accept]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const r = await api(`/api/clinician/triage/${encodeURIComponent(b.dataset.accept)}/accept-referral`, { method: 'POST', body: { facilityId: b.dataset.facility } });
+      showToast('Referral accepted', `${r.acceptedReferral.name}. Recorded in the audit log.`, 'success');
+      await refreshTriage();
+    } catch (ex) { b.disabled = false; fail(ex); }
+  });
 
   // ---- Lookup + consent request ----
   let demoLoaded = false;

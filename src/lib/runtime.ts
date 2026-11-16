@@ -38,6 +38,7 @@ import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
 import { CardContentSync } from './emergency/cardSync.ts';
 import { RecordFlagStore } from './clinical/recordFlags.ts';
+import { TriageBoardStore } from './emergency/triageBoard.ts';
 import { ConsentLifecycleManager } from './consent/consentManager.ts';
 import { PatientAccessLogManager } from './audit/accessLogManager.ts';
 import { seedClinicalRecords } from './site/seedClinical.ts';
@@ -81,6 +82,7 @@ export interface Runtime {
   consentManager: ConsentLifecycleManager;
   accessLogManager: PatientAccessLogManager;
   recordFlags: RecordFlagStore;
+  triageBoard: TriageBoardStore;
   offlineScans: OfflineScanService;
   accounts: AccountStore;
   patientAuth: PatientAuthService;
@@ -153,6 +155,8 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
     }
   }
   const recordFlags = new RecordFlagStore({ clinicalStore, auditManager, dispatcher });
+  // Triage agent results (decision support, never clinical records): the clinician triage board.
+  const triageBoard = new TriageBoardStore({ auditManager });
   const offlineScans = new OfflineScanService({
     auditManager, dispatcher, cardStore: offlineCardStore, clinicians: seedData.clinicians, facilities: seedData.facilities, patientsById,
   });
@@ -221,7 +225,7 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
     accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake, identity, mpi, registration,
-    connectors, nationalExchange, pharmacy, addFacility, billingProviders, billing, onboarding, anomalyAgent,
+    connectors, nationalExchange, pharmacy, addFacility, billingProviders, billing, onboarding, anomalyAgent, triageBoard,
   };
 }
 
@@ -247,6 +251,7 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.billing.persistence = persistence;
   rt.onboarding.persistence = persistence;
   rt.anomalyAgent.persistence = persistence;
+  rt.triageBoard.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins((f) => !rt.onboarding.hasApplication(f.id)); // never for self-registered facilities
   rt.staff.bootstrapPlatformAdmin();
@@ -327,6 +332,7 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.billing.hydrate(snapshot.subscriptions || []);
   rt.onboarding.hydrate(snapshot.facilityApplications || [], snapshot.staffInvites || []);
   rt.anomalyAgent.hydrate(snapshot.anomalyFlags || []);
+  rt.triageBoard.hydrate(snapshot.triageResults || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);
