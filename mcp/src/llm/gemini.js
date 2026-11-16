@@ -80,7 +80,15 @@ export function createGeminiProvider({ apiKey, model, client } = {}) {
       });
       const toolCalls = (res.functionCalls ?? []).map((c, i) => ({ id: c.id ?? `call-${i}`, name: c.name, args: c.args ?? {} }));
       const text = toolCalls.length ? null : (res.text ?? null);
-      return { text, toolCalls, raw: res.candidates?.[0]?.content };
+      // Measured token use, as reported by the API for this call (thinking tokens are billed as output).
+      const u = res.usageMetadata ?? {};
+      const usage = {
+        inputTokens: u.promptTokenCount ?? 0,
+        outputTokens: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+        cachedTokens: u.cachedContentTokenCount ?? 0,
+        totalTokens: u.totalTokenCount ?? 0,
+      };
+      return { text, toolCalls, raw: res.candidates?.[0]?.content, usage, model };
     },
   };
 }

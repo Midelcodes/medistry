@@ -39,6 +39,8 @@ export interface TriageResult {
   referralOptions: ReferralOption[];
   handoverText: string;
   deterioration: { deteriorating: boolean; flags: string[] } | null;
+  // Measured by the agent harness for the run that produced this result (shown on the board).
+  agentMetrics: { model: string; modelCalls: number; toolCalls: number; inputTokens: number; outputTokens: number; costUsd: number | null } | null;
   createdAt: string;
   acceptedReferral: AcceptedReferral | null;
 }
@@ -90,6 +92,16 @@ export function parseTriagePayload(body: any): Omit<TriageResult, 'id' | 'patien
       return { facilityId, name: str(o?.name, 120) || facilityId, distanceKm: num(o?.distanceKm, 0, 5000, 'distanceKm'), level: str(o?.level, 40), icuBedsFree: num(o?.icuBedsFree ?? 0, 0, 1000, 'icuBedsFree') };
     }),
     handoverText: str(body.handoverText, 8000).replace(/ {2,}/g, ' ') || '',
+    agentMetrics: body.agentMetrics && typeof body.agentMetrics === 'object'
+      ? {
+        model: str(body.agentMetrics.model, 80) || 'unknown',
+        modelCalls: num(body.agentMetrics.modelCalls ?? 0, 0, 100, 'modelCalls'),
+        toolCalls: num(body.agentMetrics.toolCalls ?? 0, 0, 200, 'toolCalls'),
+        inputTokens: num(body.agentMetrics.inputTokens ?? 0, 0, 10_000_000, 'inputTokens'),
+        outputTokens: num(body.agentMetrics.outputTokens ?? 0, 0, 10_000_000, 'outputTokens'),
+        costUsd: body.agentMetrics.costUsd === null || body.agentMetrics.costUsd === undefined ? null : num(body.agentMetrics.costUsd, 0, 1000, 'costUsd'),
+      }
+      : null,
     deterioration: body.deterioration && typeof body.deterioration === 'object'
       ? { deteriorating: body.deterioration.deteriorating === true, flags: list(body.deterioration.flags, 10, 'deterioration flags', (f) => str(f, 200)) }
       : null,

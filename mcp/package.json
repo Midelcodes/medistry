@@ -9,7 +9,8 @@
     "demo": "node src/orchestrator.js",
     "demo:deteriorate": "node src/orchestrator.js --deteriorate",
     "test": "node --test test/*.test.js",
-    "agent": "node src/agent.js"
+    "agent": "node src/agent.js",
+    "costs": "node src/costs.js"
   },
   "engines": {
     "node": ">=22"
