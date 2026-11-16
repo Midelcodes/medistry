@@ -5,6 +5,7 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
+    "postinstall": "prisma generate",
     "start": "node --env-file-if-exists=.env --experimental-strip-types src/server.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "seed": "node --env-file-if-exists=.env --experimental-strip-types scripts/seed.ts",
