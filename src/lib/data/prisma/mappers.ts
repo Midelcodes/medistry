@@ -28,6 +28,7 @@ import type { FacilityPatientLink } from '../../integrations/fhirImport.ts';
 import type { IntakeSession } from '../../intake/intakeService.ts';
 import type { PatientIdentifier } from '../../identity/identityStore.ts';
 import type { DuplicateReview, PatientMerge } from '../../identity/mpi.ts';
+import type { OutboxMessage } from '../../integrations/hie/nationalExchange.ts';
 
 type Row = Record<string, any>;
 
@@ -44,11 +45,11 @@ function clean<T extends object>(o: T): T {
 // ---------- Facility ----------
 export const facilityToRow = (f: SeedFacility): Row => ({
   id: f.id, name: f.name, region: f.region, type: f.type, address: f.address, countryCode: f.countryCode,
-  registryCode: f.registryCode, synthetic: !!f.synthetic, status: 'VERIFIED',
+  registryCode: f.registryCode, synthetic: !!f.synthetic, status: 'VERIFIED', kind: f.kind || 'HOSPITAL',
 });
 export const rowToFacility = (r: Row): SeedFacility => clean({
   id: r.id, name: r.name, region: r.region, countryCode: r.countryCode, type: r.type, address: r.address,
-  registryCode: r.registryCode ?? null, synthetic: r.synthetic || undefined,
+  registryCode: r.registryCode ?? null, synthetic: r.synthetic || undefined, kind: r.kind && r.kind !== 'HOSPITAL' ? r.kind : undefined,
 });
 
 // ---------- Clinician (+ user) ----------
@@ -80,7 +81,7 @@ export const userAccountToRows = (a: UserAccount) => ({
     failedSignIns: a.failedSignIns, lockedUntil: date(a.lockedUntil), sessionsNotBefore: date(a.sessionsNotBefore),
     lastSignInAt: date(a.lastSignInAt), createdAt: new Date(a.createdAt),
     ussdPinHash: a.ussdPinHash ?? null, ussdPinFailures: a.ussdPinFailures ?? 0, ussdLocked: !!a.ussdLocked,
-    staffFacilityId: a.role === 'RECORDS_OFFICER' ? a.facilityId ?? null : null,
+    staffFacilityId: a.role === 'RECORDS_OFFICER' || a.role === 'PHARMACIST' ? a.facilityId ?? null : null,
   },
   facilityAdmin: a.role === 'FACILITY_ADMIN' && a.facilityId ? { userId: a.id, facilityId: a.facilityId } : null,
 });
@@ -92,6 +93,17 @@ export const rowToUserAccount = (r: Row): UserAccount => clean({
   lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
   ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined,
 } as UserAccount);
+
+// ---------- Phase 17: national exchange outbox ----------
+export const outboxToRow = (m: OutboxMessage): Row => ({
+  ...m, lastError: m.lastError ?? null, remoteId: m.remoteId ?? null, nextAttemptAt: new Date(m.nextAttemptAt), createdAt: new Date(m.createdAt),
+  updatedAt: new Date(m.updatedAt), sentAt: date(m.sentAt),
+});
+export const rowToOutbox = (r: Row): OutboxMessage => clean({
+  id: r.id, kind: r.kind, connector: r.connector, patientId: r.patientId, recordId: r.recordId, resourceType: r.resourceType, facilityId: r.facilityId,
+  status: r.status, attempts: r.attempts, nextAttemptAt: iso(r.nextAttemptAt)!, lastError: r.lastError ?? undefined, remoteId: r.remoteId ?? undefined,
+  createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!, sentAt: iso(r.sentAt),
+} as OutboxMessage);
 
 // ---------- Phase 16: national identifiers, duplicate reviews, merges ----------
 export const identifierToRow = (i: PatientIdentifier): Row => ({ ...i, verifiedAt: date(i.verifiedAt), createdAt: new Date(i.createdAt) });
@@ -230,7 +242,7 @@ export function rowToCode(r: Row): EmergencyCodeEntity {
 export const recordToRow = (x: StoredClinicalRecord): Row => ({
   id: x.id, patientId: x.patientId, resourceType: x.resourceType, versionId: x.versionId, isLatest: x.isLatest,
   previousVersionId: x.previousVersionId ?? null,
-  status: x.status.toUpperCase(), source: x.source.toUpperCase().replace('-', '_'), externalKey: x.externalKey ?? null,
+  status: x.status.toUpperCase(), source: x.source.toUpperCase().replace('-', '_'), externalKey: x.externalKey ?? null, orderingClinicianId: x.orderingClinicianId ?? null,
   draftedByUserId: x.draftedByUserId ?? null, signedByClinicianId: x.signedByClinicianId ?? null, signedAt: date(x.signedAt),
   authorClinicianId: x.authorClinicianId, originFacilityId: x.originFacilityId, countryCode: x.countryCode,
   clinicalCategory: x.clinicalCategory ?? null, effectiveDate: x.effectiveDate,
@@ -240,7 +252,7 @@ export const recordToRow = (x: StoredClinicalRecord): Row => ({
 export const rowToRecord = (r: Row): StoredClinicalRecord => clean({
   id: r.id, patientId: r.patientId, resourceType: r.resourceType, versionId: r.versionId, isLatest: r.isLatest,
   previousVersionId: r.previousVersionId ?? undefined,
-  status: String(r.status).toLowerCase(), source: String(r.source).toLowerCase().replace('_', '-'), externalKey: r.externalKey ?? undefined,
+  status: String(r.status).toLowerCase(), source: String(r.source).toLowerCase().replace('_', '-'), externalKey: r.externalKey ?? undefined, orderingClinicianId: r.orderingClinicianId ?? undefined,
   draftedByUserId: r.draftedByUserId ?? undefined, signedByClinicianId: r.signedByClinicianId ?? undefined, signedAt: iso(r.signedAt),
   authorClinicianId: r.authorClinicianId, originFacilityId: r.originFacilityId, countryCode: r.countryCode,
   clinicalCategory: r.clinicalCategory ?? undefined, effectiveDate: r.effectiveDate,

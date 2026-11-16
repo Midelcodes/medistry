@@ -22,6 +22,7 @@ enum UserRole {
   FACILITY_ADMIN
   PLATFORM_ADMIN
   PROXY           // portal user without their own linked record: acts only as a proxy (parent, caregiver...)
+  PHARMACIST      // staff of a PHARMACY facility: active medications and dispensing only, under consent (Phase 17)
 }
 
 enum VerificationStatus {
@@ -56,6 +57,7 @@ enum RecordSource {
   PATIENT_REPORTED // stated by the patient; shown as "Patient-reported, not clinician-verified"
   EMR_IMPORT       // pushed by a facility system (FHIR import, Phase 15)
   AI_DRAFT         // proposed by the AI intake agent; final only after a doctor signs
+  PHARMACY         // a dispensing record written by a pharmacy (Phase 17)
 }
 
 enum RecordFlagStatus {
@@ -115,6 +117,7 @@ enum FHIRResourceType {
   AllergyIntolerance
   Immunization
   DocumentReference
+  MedicationDispense
 }
 
 model User {
@@ -176,6 +179,7 @@ model Facility {
   phone           String?
   email           String?
   synthetic       Boolean            @default(false)
+  kind            String             @default("HOSPITAL") // HOSPITAL | CLINIC | LAB | PHARMACY (Phase 17)
   status          VerificationStatus @default(PENDING)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
@@ -432,6 +436,7 @@ model PatientRecord {
   signedByClinicianId String?          // doctor who signed (set for every FINAL version)
   signedAt            DateTime?
   externalKey         String?          // imports: SHA-256 of facility|type|identifier, for idempotent re-imports
+  orderingClinicianId String?          // lab results: the clinician who ordered the test (Phase 17)
   flags               RecordFlag[]
 
   // Author: a clinician id, or a staff user id for drafts (so no foreign key).
@@ -669,6 +674,28 @@ model PatientMerge {
   unmergedAt DateTime?
 
   @@index([survivorId])
+}
+
+// Outbound sync to a national health information exchange (Phase 17). Ids only: the record is read at send time.
+model OutboxMessage {
+  id            String    @id
+  kind          String    // hie-push
+  connector     String    // country code of the connector
+  patientId     String
+  recordId      String
+  resourceType  String
+  facilityId    String
+  status        String    // PENDING | SENT | DEAD | CANCELLED
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime
+  lastError     String?
+  remoteId      String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sentAt        DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([facilityId])
 }
 
 enum DeliveryStatus {

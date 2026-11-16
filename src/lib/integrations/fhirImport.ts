@@ -31,6 +31,9 @@ import crypto from 'node:crypto';
 import { keyProvider } from '../crypto/keyProvider.ts';
 import type { IdentityStore } from '../identity/identityStore.ts';
 import { REVIEW_THRESHOLD, type MasterPatientIndex } from '../identity/mpi.ts';
+import type { SeedFacility } from '../../../prisma/seed.ts';
+import type { NotificationDispatcher } from '../notifications/dispatcher.ts';
+import type { AccountStore } from '../auth/accounts.ts';
 
 /**
  * FHIR identifier systems for national identifiers (Phase 16): Medistry's own namespace by default
@@ -147,6 +150,8 @@ export class FhirImportService {
     clinicalStore: ClinicalDataStore; patientsById: Map<string, PatientEntity>; clinicians: SeedClinician[];
     consentManager: ConsentLifecycleManager; auditManager: AuditChainManager; links: FacilityPatientLinkStore; documents: SecureDocumentManager;
     identity?: IdentityStore; mpi?: MasterPatientIndex;
+    // Phase 17: facility kinds (labs, pharmacies) and result notifications
+    facilities?: SeedFacility[]; dispatcher?: NotificationDispatcher; accounts?: AccountStore;
   };
 
   constructor(deps: FhirImportService['deps']) {
@@ -156,7 +161,8 @@ export class FhirImportService {
   private facilityConnected(facilityId: string, patient: PatientEntity): boolean {
     if (patient.primaryFacilityId === facilityId || this.deps.links.hasFacility(facilityId, patient.id)) return true;
     const now = Date.now();
-    return this.deps.consentManager.getPatientConsents(patient.id).some((g) => !g.isRevoked && new Date(g.validUntil).getTime() > now && g.targetFacilityId === facilityId);
+    // Only full-record consents count (a pharmacy's medications-only consent does not let it file records).
+    return this.deps.consentManager.getPatientConsents(patient.id).some((g) => !g.isRevoked && new Date(g.validUntil).getTime() > now && g.targetFacilityId === facilityId && g.scopes.includes('all'));
   }
 
   private checkCodings(cc: any, where: string, issues: OperationOutcomeIssue[]): void {
@@ -243,6 +249,30 @@ export class FhirImportService {
     return refs.map(refId).filter((x): x is string => !!x && (x.startsWith('Practitioner/') || x.startsWith('urn:')));
   }
 
+  /**
+   * Lab results are ready: the patient gets an SMS (template, no result content) and an app notification; the
+   * ordering clinician gets an app notification. Once per patient per bundle. Audited without content.
+   */
+  private async notifyResults(results: Map<string, string[]>, client: ImportClient, info: { ipAddress: string; userAgent: string }): Promise<void> {
+    const { dispatcher, accounts } = this.deps;
+    if (!dispatcher) return;
+    for (const [patientId, orderers] of results) {
+      const patient = this.deps.patientsById.get(patientId);
+      const account = accounts?.byPatient(patientId);
+      const phone = account ? accounts!.phoneOf(account) : undefined;
+      if (phone) await dispatcher.sendSms(phone, { template: 'lab_result_ready', locale: patient?.preferredLocale });
+      await dispatcher.notifyUser(patientId, 'Result ready', 'A new result is in your Medistry record.');
+      for (const id of new Set(orderers)) {
+        const c = this.deps.clinicians.find((x) => x.id === id);
+        if (c) await dispatcher.notifyUser(c.userId, 'Lab result ready', 'A result you ordered has arrived. Open your results list in Medistry.');
+      }
+      this.deps.auditManager.appendEntry({
+        actorId: `api-client:${client.clientId}`, subjectId: patientId, action: 'LAB_RESULT_NOTIFIED', accessType: 'SYSTEM_ADMIN', facilityId: client.facilityId,
+        ipAddress: info.ipAddress, userAgent: info.userAgent, reason: `Patient told a result is ready (${phone ? 'SMS and app' : 'app'}; no result content); ordering clinician notified`,
+      });
+    }
+  }
+
   async importBundle(bundle: any, client: ImportClient, info: { ipAddress: string; userAgent: string }): Promise<ImportResult> {
     const issues: OperationOutcomeIssue[] = [];
     const reject = (status: number) => {
@@ -255,6 +285,12 @@ export class FhirImportService {
     if (bundle?.resourceType !== 'Bundle' || !['transaction', 'collection'].includes(bundle?.type)) {
       issues.push({ severity: 'error', code: 'invalid', diagnostics: 'Expected a FHIR R4 Bundle of type transaction or collection', expression: ['Bundle.type'] });
       throw reject(400);
+    }
+    // Phase 17: labs submit results only; pharmacies never import (they record dispensing through /api/pharmacy).
+    const kind = this.deps.facilities?.find((f) => f.id === client.facilityId)?.kind || 'HOSPITAL';
+    if (kind === 'PHARMACY') {
+      issues.push({ severity: 'error', code: 'forbidden', diagnostics: 'Pharmacies cannot import records; dispensing is recorded through the pharmacy API', expression: ['Bundle'] });
+      throw reject(403);
     }
     const entries: any[] = Array.isArray(bundle.entry) ? bundle.entry : [];
     if (!entries.length || entries.length > MAX_BUNDLE_ENTRIES) {
@@ -312,15 +348,30 @@ export class FhirImportService {
       }
     });
 
+    // Pass 1a+: ServiceRequest entries (link only): who ordered a lab test.
+    const orders = new Map<string, SeedClinician | null>();
+    entries.forEach((e) => {
+      const r = e?.resource;
+      if (r?.resourceType !== 'ServiceRequest') return;
+      const ref = refId(r.requester);
+      const c = ref ? (practitionerRefs.get(ref) ?? this.deps.clinicians.find((x) => `Practitioner/${x.id}` === ref) ?? null) : null;
+      if (r.id) orders.set(`ServiceRequest/${r.id}`, c);
+      if (e.fullUrl) orders.set(e.fullUrl, c);
+    });
+
     // Pass 1b: clinical entries.
-    type Planned = { resource: any; patientId: string; externalKey: string; authorClinicianId?: string; category?: string };
+    type Planned = { resource: any; patientId: string; externalKey: string; authorClinicianId?: string; category?: string; orderingClinicianId?: string };
     const planned: Planned[] = [];
     const keys = new Set<string>();
     for (const [i, e] of entries.entries()) {
       const r = e?.resource;
       const at = `Bundle.entry[${i}].resource`;
       if (!r || typeof r !== 'object') { issues.push({ severity: 'error', code: 'required', diagnostics: 'Entry without a resource', expression: [`Bundle.entry[${i}]`] }); continue; }
-      if (r.resourceType === 'Patient' || r.resourceType === 'Practitioner') continue;
+      if (r.resourceType === 'Patient' || r.resourceType === 'Practitioner' || r.resourceType === 'ServiceRequest') continue;
+      if (kind === 'LAB' && r.resourceType !== 'DiagnosticReport' && r.resourceType !== 'Observation') {
+        issues.push({ severity: 'error', code: 'not-supported', diagnostics: 'Laboratories submit DiagnosticReport and Observation only', expression: [at] });
+        continue;
+      }
       if (!SUPPORTED_IMPORT_TYPES.includes(r.resourceType)) {
         issues.push({ severity: 'error', code: 'not-supported', diagnostics: `${String(r.resourceType).slice(0, 40)} is not supported for import`, expression: [at] });
         continue;
@@ -331,9 +382,18 @@ export class FhirImportService {
       let patientId = subject ? patientRefs.get(subject) : undefined;
       if (!patientId && subject?.startsWith('Patient/') && this.deps.patientsById.has(subject.slice(8))) patientId = subject.slice(8);
       const patient = patientId ? this.deps.patientsById.get(patientId) : undefined;
+      // Lab results must name the verified clinician who ordered them (basedOn a ServiceRequest with a requester).
+      const orderer = kind === 'LAB'
+        ? (Array.isArray(r.basedOn) ? r.basedOn : []).map((b: any) => orders.get(refId(b) || '')).find((c: SeedClinician | null | undefined) => c && c.status === 'VERIFIED')
+        : undefined;
+      if (kind === 'LAB' && !orderer) {
+        issues.push({ severity: 'error', code: 'required', diagnostics: 'A lab result must reference its order (basedOn a ServiceRequest whose requester is a verified Medistry clinician)', expression: [`${at}.basedOn`] });
+      }
+      // A lab is connected through the ordering clinician's active consent for this patient.
+      const labConnected = !!(orderer && patient && this.deps.consentManager.resolveActiveConsent(patient.id, orderer.id, orderer.facilityId));
       if (subject && !patient) {
         issues.push({ severity: 'error', code: 'not-found', diagnostics: 'The subject does not match a Medistry patient (patients are never created from imports)', expression: [`${at}.${r.resourceType === 'AllergyIntolerance' ? 'patient' : 'subject'}`] });
-      } else if (patient && !this.facilityConnected(client.facilityId, patient) && !pendingLinks.some((l) => l.patientId === patient.id)) {
+      } else if (patient && !labConnected && !this.facilityConnected(client.facilityId, patient) && !pendingLinks.some((l) => l.patientId === patient.id)) {
         issues.push({ severity: 'error', code: 'forbidden', diagnostics: 'This facility is not connected to the patient (no primary facility, consent or earlier import)', expression: [at] });
       }
       const ident = (Array.isArray(r.identifier) ? r.identifier : []).find((x: any) => typeof x?.value === 'string' && x.value);
@@ -357,20 +417,24 @@ export class FhirImportService {
       const author = this.authorRefs(r).map((ref) => practitionerRefs.get(ref) ?? this.deps.clinicians.find((c) => `Practitioner/${c.id}` === ref) ?? null)
         .find((c) => c && c.status === 'VERIFIED' && c.facilityId === client.facilityId);
       const category = r.resourceType === 'Observation' ? r.category?.[0]?.coding?.[0]?.code : undefined;
-      planned.push({ resource: r, patientId: patient.id, externalKey, authorClinicianId: author?.id, category });
+      planned.push({ resource: r, patientId: patient.id, externalKey, authorClinicianId: kind === 'LAB' ? undefined : author?.id, category, orderingClinicianId: orderer?.id });
     }
     if (issues.length) throw reject(422);
 
     // Pass 2: write (validation passed for every entry).
     const summary = { created: 0, updated: 0, unchanged: 0, drafts: 0 };
     const responseEntries: ImportResult['response']['entry'] = [];
+    const newResults = new Map<string, string[]>(); // patientId -> ordering clinician ids (lab results)
     for (const p of planned) {
       const resource = this.normalise(structuredClone(p.resource)) as AnyClinicalFHIRResource;
       const subjectField = resource.resourceType === 'AllergyIntolerance' ? 'patient' : 'subject';
       (resource as any)[subjectField] = { reference: `Patient/${p.patientId}` };
+      if (p.orderingClinicianId) (resource as any).basedOn = [{ display: `Ordered by ${this.deps.clinicians.find((c) => c.id === p.orderingClinicianId)?.fullName}` }];
       const { record, outcome } = this.deps.clinicalStore.importRecord(p.patientId, resource, {
         facilityId: client.facilityId, externalKey: p.externalKey, authorClinicianId: p.authorClinicianId, clientId: client.clientId, category: p.category,
+        ...(p.orderingClinicianId ? { labResult: { orderingClinicianId: p.orderingClinicianId } } : {}),
       });
+      if (p.orderingClinicianId && outcome !== 'unchanged') newResults.set(p.patientId, [...(newResults.get(p.patientId) || []), p.orderingClinicianId]);
       summary[outcome]++;
       if (record.status === 'draft' && outcome !== 'unchanged') summary.drafts++;
       responseEntries.push({
@@ -382,6 +446,7 @@ export class FhirImportService {
       });
     }
     for (const l of pendingLinks) this.deps.links.add(client.facilityId, l.system, l.value, l.patientId);
+    await this.notifyResults(newResults, client, info);
     this.deps.auditManager.appendEntry({
       actorId: `api-client:${client.clientId}`, action: 'FHIR_BUNDLE_IMPORTED', accessType: 'SYSTEM_ADMIN', facilityId: client.facilityId,
       ipAddress: info.ipAddress, userAgent: info.userAgent,

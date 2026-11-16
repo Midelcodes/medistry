@@ -22,6 +22,11 @@ import { IdentityStore } from './identity/identityStore.ts';
 import { MasterPatientIndex } from './identity/mpi.ts';
 import { createIdentityVerifier } from './identity/IdentityVerifier.ts';
 import { PatientRegistrationService } from './identity/registration.ts';
+import { createHieConnectors, type HieConnector } from './integrations/hie/HieConnector.ts';
+import { NationalExchangeService } from './integrations/hie/nationalExchange.ts';
+import { PharmacyService } from './integrations/pharmacy.ts';
+import { normalizePatientCode } from './code/crockford.ts';
+import type { SeedFacility } from '../../prisma/seed.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
@@ -57,6 +62,10 @@ export interface Runtime {
   identity: IdentityStore;
   mpi: MasterPatientIndex;
   registration: PatientRegistrationService;
+  connectors: Map<string, HieConnector>;
+  nationalExchange: NationalExchangeService;
+  pharmacy: PharmacyService;
+  addFacility: (f: SeedFacility) => void;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -153,13 +162,33 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
   const registration = new PatientRegistrationService({
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, identity, mpi, verifierFor: createIdentityVerifier(), patientAuth,
   });
-  const fhirImport = new FhirImportService({ clinicalStore, patientsById, clinicians: seedData.clinicians, consentManager, auditManager, links: patientLinks, documents, identity, mpi });
+  const fhirImport = new FhirImportService({
+    clinicalStore, patientsById, clinicians: seedData.clinicians, consentManager, auditManager, links: patientLinks, documents, identity, mpi,
+    facilities: seedData.facilities, dispatcher, accounts,
+  });
+  // National exchanges, labs and pharmacies (Phase 17).
+  const connectors = createHieConnectors();
+  const nationalExchange = new NationalExchangeService({ connectors, clinicalStore, consentManager, identity, patientsById, auditManager });
+  const pharmacy = new PharmacyService({
+    clinicalStore, consentManager, offlineCards: offlineCardStore, dispatcher, accounts, auditManager, facilities: seedData.facilities, patientsById,
+    patientByCode: (code) => {
+      const p = patientsByCode.get(normalizePatientCode(code));
+      return p?.mergedIntoPatientId ? patientsById.get(mpi.canonical(p.id)) : p;
+    },
+  });
+  // A facility created at runtime (labs, pharmacies). attach() makes it write through to storage too.
+  const addFacility = (f: SeedFacility) => {
+    seedData.facilities.push(f);
+    timelineEngine.registerFacility(f.id, f.name);
+    accessLogManager.registerFacility(f.id, f.name);
+  };
   const intakeAdapters = createIntakeAdapters();
   const intake = new IntakeService({ clinicalStore, auditManager, documents, ...intakeAdapters });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
     accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake, identity, mpi, registration,
+    connectors, nationalExchange, pharmacy, addFacility,
   };
 }
 
@@ -181,13 +210,17 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.identity.persistence = persistence;
   rt.mpi.persistence = persistence;
   rt.registration.persistence = persistence;
+  rt.nationalExchange.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins();
   rt.staff.bootstrapPlatformAdmin();
   const cardSync = new CardContentSync({ patientsById: rt.patientsById, dispatcher: rt.dispatcher, auditManager: rt.auditManager });
   cardSync.persistence = persistence;
   rt.clinicalStore.onFinalRecord((event) => cardSync.handle(event));
-  return { ...rt, persistence };
+  // Doctor-signed records go to the national exchange when the patient consents (outbox; sent by the worker loop).
+  rt.clinicalStore.onFinalRecord((event) => { rt.nationalExchange.onFinalRecord(event); });
+  const addFacility = (f: SeedFacility) => { rt.addFacility(f); persistence.saveFacility(f); };
+  return { ...rt, persistence, addFacility };
 }
 
 function connectAuth(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): void {
@@ -253,6 +286,7 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.intake.hydrate(snapshot.intakeSessions || []);
   rt.identity.hydrate(snapshot.patientIdentifiers || []);
   rt.mpi.hydrate(snapshot.duplicateReviews || [], snapshot.patientMerges || []);
+  rt.nationalExchange.hydrate(snapshot.outboxMessages || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

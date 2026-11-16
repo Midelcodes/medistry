@@ -34,7 +34,8 @@ export type AnyClinicalFHIRResource =
 // 'discarded': a draft the reviewing doctor rejected (kept, never shown, never signable).
 export type RecordStatus = 'draft' | 'final' | 'discarded';
 // 'emr-import': pushed by a facility system (Phase 15). 'ai-draft': proposed by the intake agent, signed by a doctor.
-export type RecordSource = 'clinician' | 'patient-reported' | 'emr-import' | 'ai-draft';
+// 'pharmacy': a dispensing record written by a pharmacy (Phase 17).
+export type RecordSource = 'clinician' | 'patient-reported' | 'emr-import' | 'ai-draft' | 'pharmacy';
 
 /** Fired after a FINAL (doctor-signed) record is written, corrected or signed from a draft. Never for drafts. */
 export interface FinalRecordEvent {
@@ -61,6 +62,8 @@ export interface StoredClinicalRecord {
   signedAt?: string;
   // Imports: SHA-256 of "<facilityId>|<resourceType>|<identifier system>|<identifier value>" (idempotent re-imports).
   externalKey?: string;
+  // Lab results (Phase 17): the clinician who ordered the test (they are notified and see it in their results list).
+  orderingClinicianId?: string;
 
   // Origin & Federation
   authorClinicianId: string;
@@ -487,7 +490,11 @@ export class ClinicalDataStore {
   importRecord(
     patientId: string,
     resource: AnyClinicalFHIRResource,
-    context: { facilityId: string; externalKey: string; authorClinicianId?: string; clientId: string; countryCode?: string; category?: string }
+    context: {
+      facilityId: string; externalKey: string; authorClinicianId?: string; clientId: string; countryCode?: string; category?: string;
+      /** A result reported by a registered laboratory: final without a clinician signature, linked to the orderer. */
+      labResult?: { orderingClinicianId: string };
+    }
   ): { record: StoredClinicalRecord; outcome: 'created' | 'updated' | 'unchanged' } {
     const json = JSON.stringify({ ...resource, id: undefined });
     const signature = crypto.createHash('sha256').update(json).digest('hex');
@@ -502,14 +509,15 @@ export class ClinicalDataStore {
     const id = crypto.randomUUID();
     resource.id = id;
     const stored = JSON.stringify(resource);
-    const final = !!context.authorClinicianId;
+    const final = !!context.authorClinicianId || !!context.labResult;
     const record: StoredClinicalRecord = {
       id, patientId, resourceType: resource.resourceType,
       versionId: existing ? existing.versionId + 1 : 1, isLatest: true, previousVersionId: existing?.id,
       status: final ? 'final' : 'draft', source: 'emr-import',
       draftedByUserId: final ? undefined : `api-client:${context.clientId}`,
       signedByClinicianId: final ? context.authorClinicianId : undefined, signedAt: final ? now : undefined,
-      authorClinicianId: context.authorClinicianId || `api-client:${context.clientId}`,
+      authorClinicianId: context.authorClinicianId || (context.labResult ? `lab:${context.facilityId}` : `api-client:${context.clientId}`),
+      ...(context.labResult ? { orderingClinicianId: context.labResult.orderingClinicianId } : {}),
       originFacilityId: context.facilityId, countryCode: context.countryCode || deploymentCountry(), clinicalCategory: context.category,
       effectiveDate: (resource as any).effectiveDateTime || (resource as any).recordedDate || (resource as any).period?.start || (resource as any).date || now,
       encryptedPayload: encryptField(stored), payloadSignature: crypto.createHash('sha256').update(stored).digest('hex'),
@@ -528,13 +536,49 @@ export class ClinicalDataStore {
       action: `CLINICAL_RECORD_IMPORTED_${resource.resourceType.toUpperCase()}`, accessType: 'NORMAL_CONSENT',
       resourceType: resource.resourceType, resourceId: id, facilityId: context.facilityId, countryCode: record.countryCode,
       ipAddress: '127.0.0.1', userAgent: 'FhirImport/1.0',
-      reason: `${existing ? `Imported update (v${record.versionId})` : 'Imported'} from the facility system; ${final ? `signed by author ${context.authorClinicianId}` : 'no verified author: draft until a doctor signs it'}`,
+      reason: `${existing ? `Imported update (v${record.versionId})` : 'Imported'} from the facility system; ${context.labResult ? `laboratory result ordered by ${context.labResult.orderingClinicianId}` : final ? `signed by author ${context.authorClinicianId}` : 'no verified author: draft until a doctor signs it'}`,
     });
     if (final) {
       const previous = existing ? { record: existing, resource: this.decrypt(existing) } : undefined;
       this.emitFinal({ record, resource, previous, actor: { userId: `api-client:${context.clientId}`, role: 'DOCTOR', clinicianId: context.authorClinicianId, facilityId: context.facilityId, isVerifiedClinician: true } });
     }
     return { record, outcome: existing ? 'updated' : 'created' };
+  }
+
+  /**
+   * A final record written by a non-clinical service that the caller has already authorised, e.g. a pharmacy's
+   * MedicationDispense (Phase 17). It never changes another record.
+   */
+  writeServiceRecord(
+    patientId: string,
+    resource: AnyClinicalFHIRResource,
+    context: { source: RecordSource; facilityId: string; authorId: string; action: string; reason: string }
+  ): StoredClinicalRecord {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    resource.id = id;
+    const json = JSON.stringify(resource);
+    const record: StoredClinicalRecord = {
+      id, patientId, resourceType: resource.resourceType, versionId: 1, isLatest: true, status: 'final', source: context.source,
+      authorClinicianId: context.authorId, originFacilityId: context.facilityId, countryCode: deploymentCountry(),
+      effectiveDate: (resource as any).whenHandedOver || (resource as any).effectiveDateTime || now,
+      encryptedPayload: encryptField(json), payloadSignature: crypto.createHash('sha256').update(json).digest('hex'), createdAt: now, updatedAt: now,
+    };
+    this.records.set(id, record);
+    this.indexRecord(patientId, id);
+    this.persistence?.saveRecord(record);
+    this.auditManager.appendEntry({
+      actorId: context.authorId, subjectId: patientId, action: context.action, accessType: 'NORMAL_CONSENT', resourceType: resource.resourceType,
+      resourceId: id, facilityId: context.facilityId, ipAddress: '127.0.0.1', userAgent: 'ServiceClient/1.0', reason: context.reason,
+    });
+    this.emitFinal({ record, resource, actor: { userId: context.authorId, role: 'PHARMACIST', facilityId: context.facilityId } as any });
+    return record;
+  }
+
+  /** Lab results ordered by a clinician (latest versions), newest first. */
+  resultsOrderedBy(clinicianId: string): StoredClinicalRecord[] {
+    return [...this.records.values()].filter((r) => r.isLatest && r.status === 'final' && r.orderingClinicianId === clinicianId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   /** Drafts waiting for a doctor's signature (for staff and doctors under consent; not shown to patients). */

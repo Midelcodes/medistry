@@ -33,6 +33,8 @@ export interface SeedFacility {
   // Real codes are not used in this demo: Nigerian ones are unknown (null); Kenyan ones are marked DEMO-.
   registryCode: string | null;
   synthetic?: boolean;
+  // Phase 17: what the facility is. Absent = HOSPITAL. LAB submits results; PHARMACY reads medications and dispenses.
+  kind?: 'HOSPITAL' | 'CLINIC' | 'LAB' | 'PHARMACY';
 }
 
 export interface SeedClinician {

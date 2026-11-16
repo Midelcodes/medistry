@@ -4,7 +4,8 @@
  */
 
 // NURSE and RECORDS_OFFICER may only create DRAFT records; a verified doctor must sign them.
-export type UserRole = 'PATIENT' | 'DOCTOR' | 'NURSE' | 'RECORDS_OFFICER' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN';
+// PHARMACIST (Phase 17): reads active medications and records dispensing under patient consent; never edits records.
+export type UserRole = 'PATIENT' | 'DOCTOR' | 'NURSE' | 'RECORDS_OFFICER' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN' | 'PHARMACIST';
 
 export type PolicyAction = 
   | 'PATIENT_READ_RECORD'
@@ -20,6 +21,8 @@ export type PolicyAction =
   | 'CLINICIAN_VERIFY'
   | 'PATIENT_REGISTER' // create a patient record (identity checks, duplicate queue)
   | 'PATIENT_MERGE'    // merge or unmerge duplicate records, review the duplicate queue
+  | 'MEDICATION_READ'      // pharmacy: active medications only
+  | 'MEDICATION_DISPENSE'  // pharmacy: record a MedicationDispense (never changes the prescription)
   | 'AUDIT_LOG_READ';
 
 export interface ActorContext {
@@ -112,6 +115,13 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
     }
 
     return { allowed: false, statusCode: 403, reason: 'Patient role not permitted for this action' };
+  }
+
+  // 2a-. PHARMACIST: medications only, under the patient's consent to this pharmacy; nothing else, ever.
+  if (actor.role === 'PHARMACIST') {
+    if (action === 'MEDICATION_READ') return checkConsent(actor, activeConsent, 'MedicationStatement', 'Pharmacy reading active medications under patient consent');
+    if (action === 'MEDICATION_DISPENSE') return checkConsent(actor, activeConsent, 'MedicationDispense', 'Pharmacy recording dispensing under patient consent');
+    return { allowed: false, statusCode: 403, reason: 'Pharmacies can read active medications and record dispensing only; they never edit prescriptions or records' };
   }
 
   // 2a. RECORDS_OFFICER: registration and duplicate review for their own facility (Phase 16)

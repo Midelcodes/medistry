@@ -62,7 +62,7 @@ log('info', 'startup', {
 });
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration } = runtime;
+  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -96,7 +96,16 @@ const handlePortalApi = createPortalApi({
   intake,
   mpi,
   registration,
+  nationalExchange,
+  pharmacy,
+  addFacility,
 });
+
+// Outbox worker: sends due national-exchange messages (retries with backoff, then dead-letters).
+const OUTBOX_POLL_MS = Math.max(5, parseInt(process.env.OUTBOX_POLL_SECONDS || '30', 10) || 30) * 1000;
+setInterval(() => {
+  nationalExchange.processDue().catch((err) => log('error', 'outbox_worker_failed', { error: String(err?.message || err) }));
+}, OUTBOX_POLL_MS).unref();
 
 // Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th
 // birthday (also enforced on every request). Runs once at start-up.

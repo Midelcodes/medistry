@@ -33,6 +33,7 @@ export function createMemoryPersistence(): Persistence {
     savePatientIdentifier: noop,
     saveDuplicateReview: noop,
     savePatientMerge: noop,
+    saveOutboxMessage: noop,
     loadSnapshot: async () => null,
     flush: async () => {},
     close: async () => {},

@@ -126,6 +126,11 @@ These are open. None of them has been done.
 - [ ] NIN verification: obtain access through NIMC or a licensed verification partner (contract, permitted purpose,
       consent wording, data handling). Never use an unofficial NIN lookup service. (`src/lib/identity/IdentityVerifier.ts`)
 - [ ] Kenya: confirm the official channel and legal basis for national ID and SHA number verification.
+- [ ] National exchanges (Kenya DHA shared health record, Nigeria NDHI): sandbox access, conformance requirements,
+      data-sharing agreement and the legal basis for pushing records and querying summaries; confirm whether the
+      patient's 'national-exchange' consent in Medistry is required, sufficient or replaced by the national rules.
+- [ ] Pharmacies: confirm what a pharmacy may see and record under each country's rules, and the consent duration
+      (`PHARMACY_ACCESS_HOURS`).
 - [ ] Decide who may see the duplicate review queue (it shows names and dates of birth side by side) and set
       `MPI_REVIEW_THRESHOLD` from real review outcomes.
 - [ ] Confirm the Africa's Talking recipient status codes and delivery-report fields against the current

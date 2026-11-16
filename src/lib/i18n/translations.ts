@@ -327,7 +327,7 @@ export function scannerStrings(): Record<SupportedLocale, Record<string, string>
 export type SmsTemplateId =
   | 'access_alert' | 'contact_alert' | 'sign_in_code' | 'new_phone_code' | 'account_moved' | 'proxy_invite'
   | 'guardian_added' | 'guardian_ended' | 'majority_patient' | 'clinician_approved' | 'clinician_rejected'
-  | 'licence_expiring' | 'licence_expired';
+  | 'licence_expiring' | 'licence_expired' | 'lab_result_ready' | 'pharmacy_access_code';
 
 type SmsFragments = Record<SmsTemplateId | 'action_app_ussd' | 'action_app', string>;
 
@@ -348,6 +348,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: 'Your Medistry clinician registration was not approved. Contact your facility admin.',
     licence_expiring: 'Your licence on record with Medistry expires on {date}. Renew it and ask your facility admin to re-verify you.',
     licence_expired: 'Your licence on record with Medistry expired on {date}. Ask your facility admin to re-verify you.',
+    lab_result_ready: 'A new result is ready in your Medistry record. Open the app to view it.',
+    pharmacy_access_code: 'Your Medistry pharmacy access code is {code}. Share it only with the pharmacist serving you. It expires in 10 minutes.',
   },
   sw: {
     access_alert: 'Rekodi yako Medistry imefunguliwa na {doctor} katika {facility}. {action}',
@@ -365,6 +367,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: 'Usajili wako wa mhudumu wa afya wa Medistry haukuidhinishwa. Wasiliana na msimamizi wa kituo chako.',
     licence_expiring: 'Leseni yako iliyo Medistry inaisha tarehe {date}. Ifanye upya na umwombe msimamizi wa kituo akuthibitishe tena.',
     licence_expired: 'Leseni yako iliyo Medistry iliisha tarehe {date}. Mwombe msimamizi wa kituo akuthibitishe tena.',
+    lab_result_ready: 'Matokeo mapya yako tayari kwenye rekodi yako ya Medistry. Fungua programu kuyaona.',
+    pharmacy_access_code: 'Nambari yako ya ufikiaji wa duka la dawa Medistry ni {code}. Mpe tu mfamasia anayekuhudumia. Itaisha baada ya dakika 10.',
   },
   ha: {
     access_alert: '{doctor} a {facility} ya duba bayananka na Medistry. {action}',
@@ -382,6 +386,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: 'Ba a amince da rajistar ka ta likita a Medistry ba. Tuntubi mai kula da cibiyarka.',
     licence_expiring: 'Lasisinka da ke Medistry zai kare a ranar {date}. Sabunta shi ka nemi mai kula da cibiya ya sake tabbatar da kai.',
     licence_expired: 'Lasisinka da ke Medistry ya kare a ranar {date}. Nemi mai kula da cibiya ya sake tabbatar da kai.',
+    lab_result_ready: 'Sabon sakamako ya shirya a bayananka na Medistry. Bude manhajar don gani.',
+    pharmacy_access_code: 'Lambar shiga kantin magani na Medistry ita ce {code}. Ka ba mai ba ka magani kadai. Za ta kare bayan minti 10.',
   },
   yo: {
     access_alert: '{doctor} ni {facility} wo akosile Medistry re. {action}',
@@ -399,6 +405,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: 'A ko fowo si iforukosile onisegun Medistry re. Kan si alakoso ile-iwosan re.',
     licence_expiring: 'Iwe-ase re lori Medistry yoo pari ni {date}. Tun un se ki o si beere ki alakoso ile-iwosan jerisi re lekan si.',
     licence_expired: 'Iwe-ase re lori Medistry ti pari ni {date}. Beere ki alakoso ile-iwosan jerisi re lekan si.',
+    lab_result_ready: 'Esi tuntun ti setan ninu akosile Medistry re. Si app naa lati wo o.',
+    pharmacy_access_code: 'Koodu ile-itaja oogun Medistry re ni {code}. Fi han onisegun oogun to n sin o nikan. Yoo pari ni iseju 10.',
   },
   ig: {
     access_alert: '{doctor} na {facility} lere ndeko Medistry gi anya. {action}',
@@ -416,6 +424,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: 'Anabataghi ndebanye aha dibia Medistry gi. Kpoo onye njikwa ulo oru gi.',
     licence_expiring: 'Akwukwo ikike gi na Medistry ga-agwu na {date}. Megharia ya ma rio onye njikwa ulo oru ka o kwado gi ozo.',
     licence_expired: 'Akwukwo ikike gi na Medistry agwula na {date}. Rio onye njikwa ulo oru ka o kwado gi ozo.',
+    lab_result_ready: 'Nsonaazu ohuru di njikere na ndeko Medistry gi. Mepee app iji lee ya.',
+    pharmacy_access_code: 'Koodu ulo ahia ogwu Medistry gi bu {code}. Gosi ya naani onye na-enye gi ogwu. O ga-agwu na nkeji 10.',
   },
   fr: {
     access_alert: 'Dossier Medistry consulté par {doctor} à {facility}. {action}',
@@ -433,6 +443,8 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     clinician_rejected: "Votre inscription de clinicien Medistry n'a pas été approuvée. Contactez l'administrateur de votre établissement.",
     licence_expiring: 'Votre licence enregistrée sur Medistry expire le {date}. Renouvelez-la et demandez une nouvelle vérification.',
     licence_expired: 'Votre licence enregistrée sur Medistry a expiré le {date}. Demandez une nouvelle vérification à votre établissement.',
+    lab_result_ready: "Un nouveau résultat est disponible dans votre dossier Medistry. Ouvrez l'appli pour le voir.",
+    pharmacy_access_code: "Votre code d'accès pharmacie Medistry est {code}. Ne le donnez qu'au pharmacien qui vous sert. Il expire dans 10 minutes.",
   },
 };
 

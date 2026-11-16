@@ -78,7 +78,7 @@ export class StaffService {
     const account = this.deps.accounts.get(clinician ? clinician.userId : id);
     if (account?.encryptedTotpSecret) return null;
     if (clinician) return this.derivedSecret(id);
-    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role) ? this.derivedSecret(id) : null;
+    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST'].includes(account.role) ? this.derivedSecret(id) : null;
   }
 
   private enrolment(label: string): { secret: string; enrolment: TotpEnrolment } {
@@ -146,7 +146,7 @@ export class StaffService {
   findAdmin(body: { adminId?: unknown; email?: unknown }): UserAccount | undefined {
     const email = normalizeEmail(body.email);
     const account = typeof body.adminId === 'string' && body.adminId ? this.deps.accounts.get(body.adminId) : email ? this.deps.accounts.byEmailAddress(email) : undefined;
-    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role) ? account : undefined;
+    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST'].includes(account.role) ? account : undefined;
   }
 
   async signInAdmin(admin: UserAccount, password: unknown, totp: unknown, info: RequestInfo, now = Date.now()): Promise<void> {
@@ -168,10 +168,11 @@ export class StaffService {
   }
 
   /** A facility admin (own facility) or platform admin creates a records officer. Returns the authenticator enrolment once. */
-  async createRecordsOfficer(by: UserAccount, body: any, info: RequestInfo): Promise<{ officer: UserAccount; totpEnrolment: TotpEnrolment }> {
-    if (by.role !== 'FACILITY_ADMIN' && by.role !== 'PLATFORM_ADMIN') throw new AuthError(403, 'Only facility or platform admins create records officers');
+  async createRecordsOfficer(by: UserAccount, body: any, info: RequestInfo, role: 'RECORDS_OFFICER' | 'PHARMACIST' = 'RECORDS_OFFICER'): Promise<{ officer: UserAccount; totpEnrolment: TotpEnrolment }> {
+    if (by.role !== 'FACILITY_ADMIN' && by.role !== 'PLATFORM_ADMIN') throw new AuthError(403, 'Only facility or platform admins create staff accounts');
     const facilityId = by.role === 'FACILITY_ADMIN' ? by.facilityId : body.facilityId;
     const facility = this.deps.facilities.find((f) => f.id === facilityId);
+    if (role === 'PHARMACIST' && facility && facility.kind !== 'PHARMACY') throw new AuthError(400, 'Pharmacists belong to a PHARMACY facility');
     const fullName = text(body.name, 120);
     const email = normalizeEmail(body.email);
     if (!facility) throw new AuthError(400, 'Unknown facility');
@@ -181,11 +182,11 @@ export class StaffService {
     if (this.deps.accounts.byEmailAddress(email)) throw new AuthError(409, 'This email address belongs to another account');
     const { secret, enrolment } = this.enrolment(email);
     const officer = this.deps.accounts.create({
-      id: `records-${crypto.randomUUID()}`, role: 'RECORDS_OFFICER', countryCode: facility.countryCode, facilityId: facility.id, displayName: fullName,
+      id: `${role === 'PHARMACIST' ? 'pharmacist' : 'records'}-${crypto.randomUUID()}`, role, countryCode: facility.countryCode, facilityId: facility.id, displayName: fullName,
       passwordHash: await hashPassword(password), encryptedTotpSecret: encryptField(secret),
     });
     this.deps.accounts.setEmail(officer, email);
-    this.audit('RECORDS_OFFICER_CREATED', by.id, info, `Records officer ${officer.id} created`, { facilityId: facility.id });
+    this.audit(`${role}_CREATED`, by.id, info, `${role === 'PHARMACIST' ? 'Pharmacist' : 'Records officer'} ${officer.id} created`, { facilityId: facility.id });
     return { officer, totpEnrolment: enrolment };
   }
 

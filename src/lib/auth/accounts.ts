@@ -10,7 +10,8 @@ import { encryptField, decryptField } from '../patient/profile.ts';
 import { keyProvider } from '../crypto/keyProvider.ts';
 
 // RECORDS_OFFICER (Phase 16): registers patients and reviews duplicates for one facility; signs in like admins.
-export type AccountRole = 'PATIENT' | 'PROXY' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN' | 'RECORDS_OFFICER';
+// PHARMACIST (Phase 17): staff of a PHARMACY facility; signs in like admins, uses /api/pharmacy only.
+export type AccountRole = 'PATIENT' | 'PROXY' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN' | 'RECORDS_OFFICER' | 'PHARMACIST';
 
 export interface UserAccount {
   id: string;                 // User id

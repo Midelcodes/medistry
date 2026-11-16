@@ -125,6 +125,28 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
 - **FHIR import** matches Patient entries by national identifier too (`urn:medistry:id:<country>:<idType>`, or aliases
   in `IDENTITY_FHIR_SYSTEMS`); probable matches are reported, never used to file records.
 
+## National exchanges, labs and pharmacies
+
+- **National health information exchanges.** `KenyaShrConnector` (Digital Health Agency exchange) and
+  `NigeriaHieConnector` (NDHI) behind one `HieConnector` interface: config-driven FHIR R4 clients (HTTPS base URL,
+  credentials, facility code, identifier systems from the environment); no agency endpoints are assumed. TODO for
+  both: sandbox access and conformance requirements from the agency.
+- **Outbound.** When a record becomes final and the patient has turned on national sharing (consent scope
+  `national-exchange`, `POST /api/patients/:id/national-exchange`), an outbox message is queued; a worker sends it,
+  retries with backoff and dead-letters after `OUTBOX_MAX_ATTEMPTS`. The subject is sent by national identifier, and
+  consent is re-checked at send time. Every push is audited. Admins see connector status, last sync, queued and failed
+  messages at `GET /api/admin/integrations` and can retry dead letters.
+- **Inbound.** `GET /api/clinician/patients/:id/national-summary` (patient consent) or
+  `GET /api/emergency/grants/:id/national-summary` (active break-glass): shown as "National exchange (KE/NG)", never
+  written into Medistry's record.
+- **Labs** (facility kind `LAB`) submit DiagnosticReport and Observation through the FHIR import with their API client;
+  each result must reference its order (a ServiceRequest whose requester is a verified clinician). Results are linked
+  to that clinician (`GET /api/clinician/lab-results`) and the patient gets "a result is ready" by SMS and app, with no
+  result content.
+- **Pharmacies** (facility kind `PHARMACY`, pharmacist accounts) read active medications and record
+  MedicationDispense, only under the patient's consent: a one-time code sent to the patient, or a scan of the
+  patient's current card while online. They can never edit a prescription or read other records.
+
 ## SMS and USSD (feature phones)
 
 - **SMS.** `SMS_PROVIDER=africastalking` sends SMS through Africa's Talking (`AT_USERNAME`, `AT_API_KEY`,

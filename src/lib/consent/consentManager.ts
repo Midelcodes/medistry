@@ -430,6 +430,32 @@ export class ConsentLifecycleManager {
   /**
    * 6. Resolves active consent for policy engine.
    */
+  /**
+   * The patient consents to sharing their signed records with the national health information exchange (Phase 17).
+   * A grant with scope 'national-exchange' and no clinician or facility target: it never opens the record to anyone
+   * in Medistry (resolveActiveConsent ignores it), and lasts until the patient revokes it.
+   */
+  grantNationalExchange(patientId: string, exchangeName: string, actorId = patientId): StoredConsentGrant {
+    const existing = this.getPatientConsents(patientId).find((g) => !g.isRevoked && g.scopes.includes('national-exchange'));
+    if (existing) return existing;
+    const grant: StoredConsentGrant = {
+      id: crypto.randomUUID(), patientId, scopes: ['national-exchange'],
+      requestingClinicianName: 'National health information exchange', requestingFacilityName: exchangeName,
+      validUntil: new Date('9999-12-31T00:00:00Z'), isRevoked: false,
+      clinicalReason: 'Share doctor-signed records with the national health information exchange', createdAt: new Date().toISOString(),
+    };
+    this.activeGrants.set(grant.id, grant);
+    this.persistence?.saveConsentGrant(grant);
+    const list = this.patientGrants.get(patientId) || [];
+    list.push(grant.id);
+    this.patientGrants.set(patientId, list);
+    this.auditManager.appendEntry({
+      actorId, subjectId: patientId, action: 'CONSENT_NATIONAL_EXCHANGE_GRANTED', accessType: 'NORMAL_CONSENT',
+      ipAddress: '127.0.0.1', userAgent: 'PatientApp/1.0', reason: `Patient consented to sharing signed records with ${exchangeName}`,
+    });
+    return grant;
+  }
+
   resolveActiveConsent(patientId: string, clinicianId: string, facilityId: string): ConsentContext | null {
     const grantIds = this.patientGrants.get(patientId) || [];
     const now = new Date();

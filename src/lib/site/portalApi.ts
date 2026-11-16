@@ -10,8 +10,8 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-import type { SeedDatabasePayload, SeedClinician } from '../../../prisma/seed.ts';
-import { decryptPatientDemographics, type PatientEntity } from '../patient/profile.ts';
+import type { SeedDatabasePayload, SeedClinician, SeedFacility } from '../../../prisma/seed.ts';
+import { decryptField, decryptPatientDemographics, type PatientEntity } from '../patient/profile.ts';
 import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { ClinicalDataStore } from '../clinical/store.ts';
 import type { ClinicalTimelineEngine, TimelineFilterOptions } from '../clinical/timeline.ts';
@@ -35,6 +35,8 @@ import type { FhirImportService } from '../integrations/fhirImport.ts';
 import type { IntakeService } from '../intake/intakeService.ts';
 import type { MasterPatientIndex } from '../identity/mpi.ts';
 import type { PatientRegistrationService } from '../identity/registration.ts';
+import { NATIONAL_EXCHANGE_SCOPE, type NationalExchangeService } from '../integrations/hie/nationalExchange.ts';
+import type { PharmacyService } from '../integrations/pharmacy.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -79,6 +81,10 @@ export interface PortalContext {
   // One person, one record (Phase 16)
   mpi: MasterPatientIndex;
   registration: PatientRegistrationService;
+  // National exchanges, labs and pharmacies (Phase 17)
+  nationalExchange: NationalExchangeService;
+  pharmacy: PharmacyService;
+  addFacility: (f: SeedFacility) => void;
 }
 
 class HttpError extends Error {
@@ -112,6 +118,8 @@ export function createPortalApi(ctx: PortalContext) {
   const tokenLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 30 });    // facility API client tokens
   const importLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 });   // FHIR bundle imports
   const intakeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });   // AI intake (uploads, model calls)
+  const pharmacyLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 }); // pharmacy access and reads
+  const exchangeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 }); // national exchange queries
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
   // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
@@ -275,7 +283,7 @@ export function createPortalApi(ctx: PortalContext) {
   function adminSession(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } {
     const claims = sessions.read(bearerOf(req));
     const account = claims?.kind === 'admin' ? ctx.accounts.get(claims.subject) : undefined;
-    if (!claims || !account || !['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role)) throw new HttpError(401, 'Admin sign-in required');
+    if (!claims || !account || !['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST'].includes(account.role)) throw new HttpError(401, 'Admin sign-in required');
     return { account, claims };
   }
 
@@ -287,7 +295,7 @@ export function createPortalApi(ctx: PortalContext) {
   /** The proxy scope a patient-portal route needs. */
   function scopeFor(method: string, sub: string): ProxyScope {
     if (/^proxies(\/|$)/.test(sub)) return 'view'; // inviting and revoking are checked by the proxy service
-    if (method !== 'GET' && /^(consents\/|disputes$|records\/[^/]+\/flag$)/.test(sub)) return 'approve-consent';
+    if (method !== 'GET' && /^(consents\/|disputes$|records\/[^/]+\/flag$|national-exchange$)/.test(sub)) return 'approve-consent';
     if (method === 'GET' && sub !== 'offline-card') return 'view';
     return 'manage-card';
   }
@@ -556,6 +564,20 @@ export function createPortalApi(ctx: PortalContext) {
       return undefined;
     }
 
+    // National exchange sharing (Phase 17): the patient's own consent scope 'national-exchange'.
+    if (sub === 'national-exchange') {
+      const grants = () => ctx.consentManager.getPatientConsents(patient.id).filter((g) => !g.isRevoked && g.scopes.includes(NATIONAL_EXCHANGE_SCOPE));
+      if (method === 'GET') return { enabled: grants().length > 0 };
+      if (method === 'POST') {
+        const body = await readBody(req);
+        if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+        if (body.enabled) ctx.consentManager.grantNationalExchange(patient.id, `${patient.countryCode} national health information exchange`);
+        else for (const g of grants()) ctx.consentManager.revokeConsent(patient.id, g.id, 'Patient stopped national exchange sharing');
+        return { enabled: grants().length > 0 };
+      }
+      return undefined;
+    }
+
     if (method === 'PATCH' && sub === 'settings') {
       limit(cardLimiter, req);
       // Visibility settings only. Clinical content (conditions, medications, allergies) cannot be changed here.
@@ -760,6 +782,20 @@ export function createPortalApi(ctx: PortalContext) {
     // ---------- Patient and proxy sign-in ----------
     if (pathname.startsWith('/api/auth/patient/')) return patientAuthRoute(req, method, pathname);
 
+    // ---------- Pharmacies (Phase 17): pharmacist accounts, patient consent required ----------
+    if (pathname.startsWith('/api/pharmacy/')) {
+      limit(pharmacyLimiter, req);
+      const { account: pharmacist } = adminSession(req);
+      if (pharmacist.role !== 'PHARMACIST') throw new HttpError(403, 'Pharmacist sign-in required');
+      const info = requestInfo(req);
+      if (method === 'POST' && pathname === '/api/pharmacy/access/request') return ctx.pharmacy.requestOtp(pharmacist, (await readBody(req)).emergencyCode, info);
+      if (method === 'POST' && pathname === '/api/pharmacy/access/card') return ctx.pharmacy.cardAccess(pharmacist, (await readBody(req)).token, info);
+      if (method === 'POST' && (m = pathname.match(/^\/api\/pharmacy\/access\/([^/]+)\/otp$/))) return ctx.pharmacy.confirmOtp(pharmacist, decodeURIComponent(m[1]), (await readBody(req)).otp, info);
+      if (method === 'GET' && (m = pathname.match(/^\/api\/pharmacy\/patients\/([^/]+)\/medications$/))) return ctx.pharmacy.medications(pharmacist, decodeURIComponent(m[1]), info);
+      if (method === 'POST' && (m = pathname.match(/^\/api\/pharmacy\/patients\/([^/]+)\/dispense$/))) return ctx.pharmacy.dispense(pharmacist, decodeURIComponent(m[1]), await readBody(req), info);
+      return undefined;
+    }
+
     // ---------- Admins ----------
     if (pathname.startsWith('/api/admin/')) return adminRoute(req, method, pathname, url);
 
@@ -921,6 +957,22 @@ export function createPortalApi(ctx: PortalContext) {
       if (method === 'POST' && (d = sub.match(/^drafts\/([^/]+)\/discard$/))) return ctx.intake.discard(intakeId, decodeURIComponent(d[1]), (await readBody(req)).reason, clinicianActor(clinician), consent);
       return undefined;
     }
+    // National exchange summary (Phase 17): with the patient's consent; shown separately, never merged.
+    if (method === 'GET' && (m = pathname.match(/^\/api\/clinician\/patients\/([^/]+)\/national-summary$/))) {
+      limit(exchangeLimiter, req);
+      const patient = getPatient(m[1]);
+      consentFor(patient.id);
+      return ctx.nationalExchange.querySummary(patient, { userId: clinician.userId, facilityId: clinician.facilityId, basis: 'consent' });
+    }
+    // Lab results this clinician ordered (Phase 17).
+    if (method === 'GET' && pathname === '/api/clinician/lab-results') {
+      return {
+        results: ctx.clinicalStore.resultsOrderedBy(clinician.id).map((r) => {
+          const res = JSON.parse(decryptField(r.encryptedPayload));
+          return { recordId: r.id, patientId: r.patientId, resourceType: r.resourceType, title: res.code?.text || r.resourceType, originFacilityId: r.originFacilityId, createdAt: r.createdAt };
+        }),
+      };
+    }
     // Drafts waiting for a doctor (imported without a verified author, or created by staff): list and sign.
     if (method === 'GET' && (m = pathname.match(/^\/api\/clinician\/patients\/([^/]+)\/drafts$/))) {
       const patient = getPatient(m[1]);
@@ -1069,6 +1121,15 @@ export function createPortalApi(ctx: PortalContext) {
       return { summary: ctx.emergencyEngine.buildEmergencySummary(getPatient(grant.patientId), grant.id) };
     }
 
+    // National exchange summary under break-glass (Phase 17): the grant's own clinicians, while it is active.
+    if (method === 'GET' && (m = pathname.match(/^\/api\/emergency\/grants\/([^/]+)\/national-summary$/))) {
+      limit(exchangeLimiter, req);
+      const grant = ctx.emergencyEngine.getGrant(m[1]);
+      if (!grant || new Date(grant.expiresAt).getTime() < Date.now()) throw new HttpError(404, 'Emergency grant not found or expired');
+      if (grant.clinicianId !== clinician.id && grant.coSignClinicianId !== clinician.id) throw new HttpError(403, 'This grant belongs to another clinician');
+      return ctx.nationalExchange.querySummary(getPatient(grant.patientId), { userId: clinician.userId, facilityId: clinician.facilityId, basis: 'break-glass' });
+    }
+
     if (method === 'GET' && (m = pathname.match(/^\/api\/emergency\/grants\/([^/]+)\/full-history$/))) {
       const grant = ctx.emergencyEngine.getGrant(m[1]);
       if (!grant) throw new HttpError(404, 'Emergency grant not found');
@@ -1170,6 +1231,9 @@ export function createPortalApi(ctx: PortalContext) {
     if (admin.role === 'RECORDS_OFFICER' && !/^\/api\/admin\/(me|logout|patients(\/.*)?|mpi\/.*)$/.test(pathname)) {
       throw new HttpError(403, 'Records officers can register patients and review duplicates only');
     }
+    if (admin.role === 'PHARMACIST' && !/^\/api\/admin\/(me|logout)$/.test(pathname)) {
+      throw new HttpError(403, 'Pharmacists use the pharmacy API only');
+    }
     if (method === 'GET' && pathname === '/api/admin/me') {
       return { admin: { id: admin.id, role: admin.role, name: admin.displayName, facilityId: admin.facilityId || null } };
     }
@@ -1205,6 +1269,39 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'POST' && pathname === '/api/admin/facility-admins') {
       const { admin: created, totpEnrolment } = await ctx.staff.createFacilityAdmin(admin, await readBody(req), info);
       return { adminId: created.id, facilityId: created.facilityId, totpEnrolment };
+    }
+
+    // National exchange integration view: connector status, last sync, queued, failed (facility admin: own facility).
+    if (method === 'GET' && pathname === '/api/admin/integrations') {
+      if (admin.role !== 'FACILITY_ADMIN' && admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Admins only');
+      return ctx.nationalExchange.adminView(admin);
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/integrations\/outbox\/([^/]+)\/retry$/))) {
+      if (admin.role !== 'FACILITY_ADMIN' && admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Admins only');
+      const msg = ctx.nationalExchange.retry(admin, decodeURIComponent(m[1]));
+      return { id: msg.id, status: msg.status };
+    }
+    // New facilities (labs, pharmacies, clinics): platform admin only.
+    if (method === 'POST' && pathname === '/api/admin/facilities') {
+      if (admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Only a platform admin adds facilities');
+      const body = await readBody(req);
+      const kind = String(body.kind || '').toUpperCase();
+      if (!['HOSPITAL', 'CLINIC', 'LAB', 'PHARMACY'].includes(kind)) throw new HttpError(400, 'kind must be HOSPITAL, CLINIC, LAB or PHARMACY');
+      const name = text(body.name, 160).trim();
+      const countryCode = String(body.countryCode || '').toUpperCase();
+      if (name.length < 3 || !/^[A-Z]{2}$/.test(countryCode)) throw new HttpError(400, 'Give the facility name and countryCode');
+      const f: SeedFacility = {
+        id: `fac-${kind.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`, name, kind: kind as SeedFacility['kind'], countryCode,
+        region: text(body.region, 80) || 'Not stated', type: kind === 'LAB' ? 'Laboratory' : kind === 'PHARMACY' ? 'Pharmacy' : text(body.type, 80) || 'Facility',
+        address: text(body.address, 200) || 'Not stated', registryCode: body.registryCode ? text(body.registryCode, 40) : null,
+      };
+      ctx.addFacility(f);
+      ctx.auditManager.appendEntry({ actorId: admin.id, action: 'FACILITY_CREATED', accessType: 'SYSTEM_ADMIN', facilityId: f.id, ipAddress: info.ipAddress, userAgent: info.userAgent, reason: `${kind} facility created` });
+      return { facility: f };
+    }
+    if (method === 'POST' && pathname === '/api/admin/pharmacists') {
+      const { officer, totpEnrolment } = await ctx.staff.createRecordsOfficer(admin, await readBody(req), info, 'PHARMACIST');
+      return { pharmacistId: officer.id, facilityId: officer.facilityId, totpEnrolment };
     }
 
     // Patient registration with identity checks; probable duplicates go to the review queue (never merged here).

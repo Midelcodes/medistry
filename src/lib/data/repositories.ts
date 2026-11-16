@@ -33,6 +33,7 @@ import type { FacilityPatientLink, FacilityPatientLinkRepo } from '../integratio
 import type { IntakeSession, IntakeSessionRepo } from '../intake/intakeService.ts';
 import type { IdentifierRepo, PatientIdentifier } from '../identity/identityStore.ts';
 import type { DuplicateReview, PatientMerge } from '../identity/mpi.ts';
+import type { OutboxMessage, OutboxRepo } from '../integrations/hie/nationalExchange.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -104,12 +105,14 @@ export interface Snapshot {
   patientIdentifiers?: PatientIdentifier[];
   duplicateReviews?: DuplicateReview[];
   patientMerges?: PatientMerge[];
+  // Phase 17
+  outboxMessages?: OutboxMessage[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
   ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
   AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo,
-  IdentifierRepo {
+  IdentifierRepo, OutboxRepo {
   saveDuplicateReview(r: DuplicateReview): void;
   savePatientMerge(m: PatientMerge): void;
   readonly mode: StorageMode;
