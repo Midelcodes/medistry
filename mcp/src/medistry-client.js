@@ -14,19 +14,64 @@ export function assertAllowedHost() {
   }
 }
 
-async function api(path, { method = "GET", token, body } = {}) {
-  const res = await fetch(BASE + path, {
-    method,
-    headers: {
-      Accept: "application/json",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+// Resilience: every call has a time limit (MEDISTRY_TIMEOUT_MS, default 8 s). A failed call is retried once when
+// it is safe to: GET requests, any request that never reached the server (connection refused, DNS), and 5xx on GET.
+// A POST that may have reached the server (timeout, 5xx) is NOT retried, so a break-glass is never opened twice.
+// MEDISTRY_FAULT_ONCE=timeout injects one simulated timeout before the first request is sent (demo of recovery).
+const TIMEOUT_MS = Number(process.env.MEDISTRY_TIMEOUT_MS) || 8000;
+let faultPending = process.env.MEDISTRY_FAULT_ONCE === "timeout";
+const NOT_SENT = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "SIMULATED_TIMEOUT"]);
+
+async function attempt(path, { method, token, body }) {
+  if (faultPending) {
+    faultPending = false;
+    const e = new Error(`simulated timeout after ${TIMEOUT_MS} ms (MEDISTRY_FAULT_ONCE)`);
+    e.code = "SIMULATED_TIMEOUT";
+    throw e;
+  }
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers: {
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (err) {
+    const code = err?.cause?.code || err?.code || (err?.name === "TimeoutError" ? "TIMEOUT" : "NETWORK");
+    const e = new Error(code === "TIMEOUT" ? `timed out after ${TIMEOUT_MS} ms` : `network error (${code})`);
+    e.code = code;
+    throw e;
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Medistry ${method} ${path} -> ${res.status}: ${data.error || "request failed"}`);
+  if (!res.ok) {
+    const e = new Error(`Medistry ${method} ${path} -> ${res.status}: ${data.error || "request failed"}`);
+    e.status = res.status;
+    throw e;
+  }
   return data;
+}
+
+async function api(path, { method = "GET", token, body } = {}) {
+  try {
+    return await attempt(path, { method, token, body });
+  } catch (err) {
+    const retriable = NOT_SENT.has(err.code) || (method === "GET" && (err.code === "TIMEOUT" || err.code === "NETWORK" || err.status >= 500));
+    if (!retriable) throw err;
+    console.error(`[medistry-client] ${method} ${path.split("/").slice(0, 3).join("/")}/... attempt 1 failed: ${err.message}. Retrying once.`);
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const data = await attempt(path, { method, token, body });
+      console.error("[medistry-client] attempt 2 succeeded.");
+      return data;
+    } catch (err2) {
+      throw new Error(`Medistry unreachable after 2 attempts: ${err2.message}`);
+    }
+  }
 }
 
 let session = null;

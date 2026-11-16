@@ -168,6 +168,11 @@ server.registerTool("post_triage_to_board", {
     handoverText: z.string().max(8000).default(""),
     deterioration: z.object({ deteriorating: z.boolean(), flags: z.array(z.string().max(200)).max(10) }).nullable().optional(),
     agentRunId: z.string().max(80).optional(),
+    agentMetrics: z.object({
+      runId: z.string().max(80).optional(), model: z.string().max(80), modelCalls: z.number().int().min(0).max(100),
+      toolCalls: z.number().int().min(0).max(200), inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0),
+      costUsd: z.number().min(0).nullable().optional(),
+    }).optional().describe("Filled by the agent harness from measured usage; do not set it yourself."),
   },
 }, async ({ grantId, ...result }) => {
   try { return ok(await postTriageResult({ grantId, result })); }

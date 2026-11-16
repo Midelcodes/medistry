@@ -96,14 +96,14 @@ test("tool errors are fed back to the model as error responses", async () => {
   assert.match(requests[1].contents.at(-1).parts[0].functionResponse.response.error, /Unknown facility/);
 });
 
-test("enforces the 8-iteration cap", async () => {
+test("enforces the 10-iteration cap", async () => {
   const { client, requests } = mockGenai((n) => ({ calls: [{ id: `q${n}`, name: "queue_get", args: { facilityId: "NG-LAG-001" } }] }));
   const out = await runAgent({ llm: provider(client), mcp, task: "loop forever" });
-  assert.equal(MAX_ITERATIONS, 8);
-  assert.equal(requests.length, 8);
+  assert.equal(MAX_ITERATIONS, 10);
+  assert.equal(requests.length, 10);
   assert.equal(out.stoppedReason, "max_iterations");
   assert.equal(out.text, null);
-  assert.equal(out.steps.length, 8);
+  assert.equal(out.steps.length, 10);
 });
 
 test("get_emergency_summary is blocked unless unconscious + code in task + confirmBreakGlass", async () => {

@@ -84,6 +84,7 @@
           ${r.deterioration && r.deterioration.flags && r.deterioration.flags.length ? `<ul class="triage-factors">${r.deterioration.flags.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
         </details>
         <details data-k="${esc(r.id)}:ref"${open('ref') || (r.acceptedReferral ? '' : ' open')}><summary>Referral${r.acceptedReferral ? `: ${esc(r.acceptedReferral.name)}` : ' options'}</summary><div class="triage-refs">${refs}</div></details>
+        ${r.agentMetrics ? `<div class="triage-agent">Agent run: ${esc(r.agentMetrics.toolCalls)} tool calls · ${esc(r.agentMetrics.modelCalls)} model calls · ${esc(Number(r.agentMetrics.inputTokens + r.agentMetrics.outputTokens).toLocaleString())} tokens · ${r.agentMetrics.costUsd == null ? 'cost n/a' : esc('$' + Number(r.agentMetrics.costUsd).toFixed(4))} · ${esc(r.agentMetrics.model)}</div>` : ''}
         <details data-k="${esc(r.id)}:handover"${open('handover')}><summary>View handover</summary><pre class="triage-handover">${esc(r.handoverText || 'No handover text.')}</pre></details>
       </div>
     </article>`;

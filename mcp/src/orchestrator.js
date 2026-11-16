@@ -153,6 +153,8 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir, scenario = 
         referralOptions: referral.map((r) => ({ facilityId: r.facilityId, name: r.name, distanceKm: r.distanceKm, level: r.level, icuBedsFree: r.icuBedsFree })),
         handoverText: report,
         deterioration: deterioration ? { deteriorating: deterioration.deteriorating, flags: deterioration.flags } : null,
+        // The LangGraph flow is rule-based: no model calls, no tokens.
+        agentMetrics: { model: "none (LangGraph, rule-based)", modelCalls: 0, toolCalls: deterioration ? 5 : 4, inputTokens: 0, outputTokens: 0, costUsd: 0 },
       });
       return { board: { posted: true, ...posted } };
     } catch (e) {
