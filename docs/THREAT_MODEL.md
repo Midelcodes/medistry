@@ -102,6 +102,17 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
 | USSD lockout used against a patient | Locking needs the patient's own number to be presented by the provider | Someone holding the phone can lock USSD on purpose; the app still works |
 | Guardian keeps control of an adult | Ends automatically on the 18th birthday (checked on every request and daily) | The age of majority is a product setting (18), not checked per jurisdiction |
 
+## 2c. Facilities and billing (Phase 18)
+
+| Threat | Mitigation | Limit |
+|---|---|---|
+| Fake facility signs up to recruit "clinicians" or get API access | Self-registered facilities stay PENDING (not listed, no clinician registration, no API clients) until a platform admin reviews the accreditation document and verifies them (audited); the document is scanned and stored encrypted | The review is manual: a convincing forged document can pass. TODO: check against the national facility registry when an official channel exists |
+| Stolen or forwarded invitation link | Single use, expires (`FACILITY_INVITE_HOURS`), stored only as a hash; opening it sends a code to the invitee's own phone; the first sign-in sets a password and authenticator once | Someone holding both the link and the invitee's phone can accept |
+| Facility admin reads patient records | Admin and staff tokens get 403 on every patient-portal, clinician-record and emergency-summary route; the policy enforcer has no PHI rule for FACILITY_ADMIN; the usage dashboard is counts only | An admin can invite a clinician who then applies; that clinician still needs approval and consent or break-glass for each patient |
+| Demo admin backdoor on a self-registered facility | Passwordless demo admins (demo mode only) are created for seed facilities only, never for facilities with an application | Demo mode must never hold real data (startup checks) |
+| Forged payment webhook activates a subscription | Paystack: HMAC-SHA512 signature (`Paystack-Signature` with timestamp, 5-minute window, or legacy `x-paystack-signature`), constant-time compare; M-Pesa: secret in the callback path (Daraja callbacks are unsigned); amount checked against the plan; events applied once; every rejection audited | The M-Pesa path secret appears in Safaricom's logs; rotate it if exposed. TODO: confirm the Daraja callback format and any signing option |
+| Non-payment cuts off emergency care | Only admin and analytics routes check the subscription (402). Break-glass, offline scanning, patient records, imports, clinician approval and staff suspension never do | None known; covered by tests |
+
 ## 3. Offline Emergency Card (Signed QR), Clinician Passes and Offline Scans
 
 Scope: the signed QR emergency card, the offline scanner at `/s`, clinician passes, device keys and

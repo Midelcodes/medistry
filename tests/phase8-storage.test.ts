@@ -23,6 +23,7 @@ function recordingPersistence() {
     user: new Map<string, any>(), proxy: new Map<string, any>(), document: new Map<string, any>(),
     delivery: new Map<string, any>(), apiClient: new Map<string, any>(), link: new Map<string, any>(), intake: new Map<string, any>(),
     identifier: new Map<string, any>(), review: new Map<string, any>(), merge: new Map<string, any>(), outbox: new Map<string, any>(),
+    application: new Map<string, any>(), invite: new Map<string, any>(), subscription: new Map<string, any>(),
   };
   let refusedAudit = 0;
   const p: Persistence & { tables: typeof t; refusedAudit: () => number } = {
@@ -54,6 +55,9 @@ function recordingPersistence() {
     saveDuplicateReview: (r) => t.review.set(r.id, M.reviewToRow(r)),
     savePatientMerge: (m) => t.merge.set(m.id, M.mergeToRow(m)),
     saveOutboxMessage: (m) => t.outbox.set(m.id, M.outboxToRow(m)),
+    saveFacilityApplication: (x) => t.application.set(x.facilityId, M.applicationToRow(x)),
+    saveStaffInvite: (i) => t.invite.set(i.id, M.inviteToRow(i)),
+    saveSubscription: (x) => t.subscription.set(x.id, M.subscriptionToRow(x)),
     appendAudit: (e) => {
       // Same continuity rule as the Prisma repository's locked append.
       const last = t.audit.at(-1);
@@ -78,6 +82,8 @@ function recordingPersistence() {
         intakeSessions: [...t.intake.values()].map(M.rowToIntake),
         patientIdentifiers: [...t.identifier.values()].map(M.rowToIdentifier), duplicateReviews: [...t.review.values()].map(M.rowToReview),
         patientMerges: [...t.merge.values()].map(M.rowToMerge), outboxMessages: [...t.outbox.values()].map(M.rowToOutbox),
+        facilityApplications: [...t.application.values()].map(M.rowToApplication), staffInvites: [...t.invite.values()].map(M.rowToInvite),
+        subscriptions: [...t.subscription.values()].map(M.rowToSubscription),
       };
     },
     flush: async () => {}, close: async () => {},
@@ -153,7 +159,14 @@ async function doEverything(rt: Runtime) {
   rt.consentManager.grantNationalExchange(first.patientId, 'NG national exchange');
   rt.clinicalStore.importRecord(first.patientId, { resourceType: 'Condition', id: '', code: { text: 'Synthetic shared condition' }, subject: { reference: `Patient/${first.patientId}` } } as any,
     { facilityId: doctor.facilityId, externalKey: crypto.randomUUID(), authorClinicianId: doctor.id, clientId: 'test' });
-  return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered, intake, first, dup, merge };
+  // Phase 18: a facility applies (accreditation document), is verified (trial subscription) and its first admin is invited.
+  const applied = await rt.onboarding.register({
+    name: 'Synthetic Storage Hospital', type: 'HOSPITAL', countryCode: 'NG', registryCode: 'SYN-STORE-18', address: 'Synthetic storage address',
+    adminContact: { name: 'Synthetic Storage Admin', email: 'storage-admin@example.org', phone: '+2348000000181' },
+    accreditationDocument: { filename: 'accreditation.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.4 Synthetic accreditation bytes').toString('base64') },
+  }, info);
+  const verified = await rt.onboarding.review(platform, applied.facilityId, 'verify', undefined, 'https://medistry.test', info);
+  return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered, intake, first, dup, merge, verified };
 }
 
 describe('Storage selection', () => {
@@ -214,6 +227,11 @@ describe('Write-through and restart (recording repository, same rows as Postgres
     assert.deepStrictEqual(b.mpi.linkedIds(did.first.patientId), [did.dup.patientId]);
     assert.strictEqual(b.mpi.getMerge(did.merge.id)!.status, 'ACTIVE');
     same(b.nationalExchange.all(), a.nationalExchange.all(), 'outbox messages');
+    same(b.billing.get(did.verified.facilityId), a.billing.get(did.verified.facilityId), 'subscription');
+    assert.ok(b.onboarding.facility(did.verified.facilityId) && b.onboarding.isVerified(did.verified.facilityId), 'verified facility');
+    same(b.onboarding.listApplications(b.accounts.get('admin-platform-demo')!, 'VERIFIED'), a.onboarding.listApplications(a.accounts.get('admin-platform-demo')!, 'VERIFIED'), 'facility application');
+    assert.strictEqual(b.accounts.get(did.verified.adminAccountId)?.role, 'FACILITY_ADMIN', 'invited admin');
+    assert.strictEqual(b.accounts.get(`admin-${did.verified.facilityId}-demo`), undefined, 'no passwordless demo admin for a self-registered facility');
     same(b.seedData.clinicians.find((c) => c.id === did.registered.clinician.id), did.registered.clinician, 'registered clinician');
     assert.strictEqual(b.staff.listForReview(b.accounts.get('admin-platform-demo')!, 'PENDING')[0].hasLicenceDocument, true, 'licence document');
     for (const id of a.patientsById.keys()) {
@@ -241,7 +259,8 @@ describe('Write-through and restart (recording repository, same rows as Postgres
       'Synthetic follow-up reason', 'Synthetic break-glass detail', 'Synthetic second opinion', 'Synthetic scan detail',
       'Synthetic flag note', 'Synthetic dispute reason', 'One-time code',
       '+2348000000101', '+2348000000102', '+2348000000103', 'registrant@example.org', 'synthetic-password-1', 'Synthetic licence bytes', 'licence.pdf',
-      'SYN-MRN-0001', 'Synthetic imported condition', 'Synthetic intake diagnosis', '90000000001', 'Adaeze', 'Nwosu', 'Synthetic shared condition'];
+      'SYN-MRN-0001', 'Synthetic imported condition', 'Synthetic intake diagnosis', '90000000001', 'Adaeze', 'Nwosu', 'Synthetic shared condition',
+      'storage-admin@example.org', '+2348000000181', 'Synthetic accreditation bytes'];
     for (const b of banned) assert.ok(!plain.includes(b), `stored rows must not contain ${String(b).slice(0, 30)}`);
   });
 

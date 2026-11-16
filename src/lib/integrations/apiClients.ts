@@ -35,7 +35,7 @@ const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
 
 export class FacilityApiClientStore {
   private byId = new Map<string, FacilityApiClient>();
-  private deps: { auditManager: AuditChainManager; facilities: Array<{ id: string }> };
+  private deps: { auditManager: AuditChainManager; facilities: Array<{ id: string; status?: string }> };
   persistence?: FacilityApiClientRepo;
 
   constructor(deps: FacilityApiClientStore['deps']) {
@@ -71,6 +71,9 @@ export class FacilityApiClientStore {
   /** Creates a client. The secret is returned once and never stored in plain text. */
   async create(admin: UserAccount, body: any, info: RequestInfo): Promise<{ client: FacilityApiClient; clientSecret: string }> {
     const facilityId = this.facilityFor(admin, body.facilityId);
+    if ((this.deps.facilities.find((f) => f.id === facilityId)?.status || 'VERIFIED') !== 'VERIFIED') {
+      throw new AuthError(403, 'This facility is not verified yet: API clients can be created once a platform admin verifies it');
+    }
     const name = String(body.name || '').replace(/[^\w .()-]/g, '').trim().slice(0, 80);
     if (name.length < 3) throw new AuthError(400, 'Give the client a name (the EMR system it is for)');
     const scopes = Array.isArray(body.scopes) && body.scopes.length ? [...new Set(body.scopes)] : ['fhir.import'];

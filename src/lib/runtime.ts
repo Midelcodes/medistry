@@ -27,6 +27,11 @@ import { NationalExchangeService } from './integrations/hie/nationalExchange.ts'
 import { PharmacyService } from './integrations/pharmacy.ts';
 import { normalizePatientCode } from './code/crockford.ts';
 import type { SeedFacility } from '../../prisma/seed.ts';
+import { BillingService } from './billing/billingService.ts';
+import { BillingNotConfigured, loadPlans, type BillingProvider } from './billing/BillingProvider.ts';
+import { PaystackProvider } from './billing/PaystackProvider.ts';
+import { MpesaDarajaProvider } from './billing/MpesaDarajaProvider.ts';
+import { FacilityOnboardingService } from './facilities/onboarding.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
@@ -66,6 +71,9 @@ export interface Runtime {
   nationalExchange: NationalExchangeService;
   pharmacy: PharmacyService;
   addFacility: (f: SeedFacility) => void;
+  billingProviders: Map<string, BillingProvider>;
+  billing: BillingService;
+  onboarding: FacilityOnboardingService;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -92,6 +100,22 @@ function smsProvider(consoleProvider: ConsoleNotificationProvider, deliveries: N
   }
   if (choice !== 'console') console.warn(`[notifications] SMS_PROVIDER=${choice.replace(/[^a-z_-]/g, '').slice(0, 20)} is not supported; using the console provider.`);
   return consoleProvider;
+}
+
+/** Test/sandbox billing providers configured in the environment (a missing or live configuration is skipped). */
+function createBillingProviders(paystackPlanCodes: Record<string, string | null>): Map<string, BillingProvider> {
+  const out = new Map<string, BillingProvider>();
+  const tryAdd = (country: string, make: () => BillingProvider) => {
+    try { out.set(country, make()); } catch (err) {
+      if (!(err instanceof BillingNotConfigured)) throw err;
+    }
+  };
+  if (process.env.PAYSTACK_SECRET_KEY) tryAdd('NG', () => new PaystackProvider({ secretKey: process.env.PAYSTACK_SECRET_KEY, webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET, planCodes: paystackPlanCodes }));
+  if (process.env.DARAJA_CONSUMER_KEY) tryAdd('KE', () => new MpesaDarajaProvider({
+    env: process.env.DARAJA_ENV, consumerKey: process.env.DARAJA_CONSUMER_KEY, consumerSecret: process.env.DARAJA_CONSUMER_SECRET,
+    shortCode: process.env.DARAJA_SHORT_CODE, passKey: process.env.DARAJA_PASSKEY, callbackSecret: process.env.DARAJA_CALLBACK_SECRET,
+  }));
+  return out;
 }
 
 function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['audit'] = []) {
@@ -184,11 +208,16 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
   };
   const intakeAdapters = createIntakeAdapters();
   const intake = new IntakeService({ clinicalStore, auditManager, documents, ...intakeAdapters });
+  // Facilities sign up, run their staff and pay (Phase 18). Billing providers: test/sandbox only, from the environment.
+  const plans = loadPlans();
+  const billingProviders = createBillingProviders(plans.paystackPlanCodes);
+  const billing = new BillingService({ auditManager, facilities: seedData.facilities, providers: () => billingProviders, demoMode: DEMO_MODE }, plans);
+  const onboarding = new FacilityOnboardingService({ facilities: seedData.facilities, clinicians: seedData.clinicians, addFacility, accounts, patientAuth, dispatcher, auditManager, billing });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
     accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake, identity, mpi, registration,
-    connectors, nationalExchange, pharmacy, addFacility,
+    connectors, nationalExchange, pharmacy, addFacility, billingProviders, billing, onboarding,
   };
 }
 
@@ -211,8 +240,10 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.mpi.persistence = persistence;
   rt.registration.persistence = persistence;
   rt.nationalExchange.persistence = persistence;
+  rt.billing.persistence = persistence;
+  rt.onboarding.persistence = persistence;
   connectAuth(rt, persistence);
-  rt.staff.ensureDemoAdmins();
+  rt.staff.ensureDemoAdmins((f) => !rt.onboarding.hasApplication(f.id)); // never for self-registered facilities
   rt.staff.bootstrapPlatformAdmin();
   const cardSync = new CardContentSync({ patientsById: rt.patientsById, dispatcher: rt.dispatcher, auditManager: rt.auditManager });
   cardSync.persistence = persistence;
@@ -220,6 +251,7 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   // Doctor-signed records go to the national exchange when the patient consents (outbox; sent by the worker loop).
   rt.clinicalStore.onFinalRecord((event) => { rt.nationalExchange.onFinalRecord(event); });
   const addFacility = (f: SeedFacility) => { rt.addFacility(f); persistence.saveFacility(f); };
+  rt.onboarding.setAddFacility(addFacility);
   return { ...rt, persistence, addFacility };
 }
 
@@ -287,6 +319,8 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.identity.hydrate(snapshot.patientIdentifiers || []);
   rt.mpi.hydrate(snapshot.duplicateReviews || [], snapshot.patientMerges || []);
   rt.nationalExchange.hydrate(snapshot.outboxMessages || []);
+  rt.billing.hydrate(snapshot.subscriptions || []);
+  rt.onboarding.hydrate(snapshot.facilityApplications || [], snapshot.staffInvites || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

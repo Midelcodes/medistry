@@ -29,6 +29,8 @@ import type { IntakeSession } from '../../intake/intakeService.ts';
 import type { PatientIdentifier } from '../../identity/identityStore.ts';
 import type { DuplicateReview, PatientMerge } from '../../identity/mpi.ts';
 import type { OutboxMessage } from '../../integrations/hie/nationalExchange.ts';
+import type { FacilityApplication, StaffInvite } from '../../facilities/onboarding.ts';
+import type { Subscription } from '../../billing/billingService.ts';
 
 type Row = Record<string, any>;
 
@@ -45,11 +47,12 @@ function clean<T extends object>(o: T): T {
 // ---------- Facility ----------
 export const facilityToRow = (f: SeedFacility): Row => ({
   id: f.id, name: f.name, region: f.region, type: f.type, address: f.address, countryCode: f.countryCode,
-  registryCode: f.registryCode, synthetic: !!f.synthetic, status: 'VERIFIED', kind: f.kind || 'HOSPITAL',
+  registryCode: f.registryCode, synthetic: !!f.synthetic, status: f.status || 'VERIFIED', kind: f.kind || 'HOSPITAL',
 });
 export const rowToFacility = (r: Row): SeedFacility => clean({
   id: r.id, name: r.name, region: r.region, countryCode: r.countryCode, type: r.type, address: r.address,
   registryCode: r.registryCode ?? null, synthetic: r.synthetic || undefined, kind: r.kind && r.kind !== 'HOSPITAL' ? r.kind : undefined,
+  status: r.status && r.status !== 'VERIFIED' ? r.status : undefined,
 });
 
 // ---------- Clinician (+ user) ----------
@@ -81,7 +84,7 @@ export const userAccountToRows = (a: UserAccount) => ({
     failedSignIns: a.failedSignIns, lockedUntil: date(a.lockedUntil), sessionsNotBefore: date(a.sessionsNotBefore),
     lastSignInAt: date(a.lastSignInAt), createdAt: new Date(a.createdAt),
     ussdPinHash: a.ussdPinHash ?? null, ussdPinFailures: a.ussdPinFailures ?? 0, ussdLocked: !!a.ussdLocked,
-    staffFacilityId: a.role === 'RECORDS_OFFICER' || a.role === 'PHARMACIST' ? a.facilityId ?? null : null,
+    staffFacilityId: ['RECORDS_OFFICER', 'PHARMACIST', 'NURSE'].includes(a.role) ? a.facilityId ?? null : null, disabled: !!a.disabled,
   },
   facilityAdmin: a.role === 'FACILITY_ADMIN' && a.facilityId ? { userId: a.id, facilityId: a.facilityId } : null,
 });
@@ -91,8 +94,32 @@ export const rowToUserAccount = (r: Row): UserAccount => clean({
   passwordHash: r.passwordHash ?? undefined, encryptedTotpSecret: r.twoFactorSecret ?? undefined, totpEnabled: !!r.twoFactorEnabled,
   failedSignIns: r.failedSignIns ?? 0, lockedUntil: iso(r.lockedUntil), sessionsNotBefore: iso(r.sessionsNotBefore),
   lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
-  ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined,
+  ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined, disabled: r.disabled || undefined,
 } as UserAccount);
+
+// ---------- Phase 18: facility applications, staff invites, subscriptions ----------
+export const applicationToRow = (a: FacilityApplication): Row => ({
+  facilityId: a.facilityId, encryptedContact: a.encryptedContact, documentId: a.document.id, encryptedFilename: encryptField(a.document.filename),
+  documentMimeType: a.document.mimeType, documentSha256: a.document.sha256, documentSizeBytes: a.document.sizeBytes, encryptedDocument: a.document.encryptedPayload,
+  status: a.status, submittedAt: new Date(a.submittedAt), reviewedBy: a.reviewedBy ?? null, reviewedAt: date(a.reviewedAt), rejectionReason: a.rejectionReason ?? null,
+});
+export const rowToApplication = (r: Row): FacilityApplication => clean({
+  facilityId: r.facilityId, encryptedContact: r.encryptedContact,
+  document: { id: r.documentId, filename: decryptField(r.encryptedFilename), mimeType: r.documentMimeType, sha256: r.documentSha256, sizeBytes: r.documentSizeBytes, encryptedPayload: r.encryptedDocument, uploadedAt: iso(r.submittedAt)! },
+  status: r.status, submittedAt: iso(r.submittedAt)!, reviewedBy: r.reviewedBy ?? undefined, reviewedAt: iso(r.reviewedAt), rejectionReason: r.rejectionReason ?? undefined,
+} as FacilityApplication);
+export const inviteToRow = (i: StaffInvite): Row => ({ ...i, usedAt: date(i.usedAt), expiresAt: new Date(i.expiresAt), createdAt: new Date(i.createdAt) });
+export const rowToInvite = (r: Row): StaffInvite => clean({
+  id: r.id, accountId: r.accountId, facilityId: r.facilityId, role: r.role, tokenHash: r.tokenHash, expiresAt: iso(r.expiresAt)!, usedAt: iso(r.usedAt),
+  createdBy: r.createdBy, createdAt: iso(r.createdAt)!,
+} as StaffInvite);
+export const subscriptionToRow = (s: Subscription): Row => ({
+  ...s, providerRef: s.providerRef ?? null, lastEventId: s.lastEventId ?? null, currentPeriodEnd: new Date(s.currentPeriodEnd), createdAt: new Date(s.createdAt), updatedAt: new Date(s.updatedAt),
+});
+export const rowToSubscription = (r: Row): Subscription => clean({
+  id: r.id, facilityId: r.facilityId, plan: r.plan, status: r.status, currentPeriodEnd: iso(r.currentPeriodEnd)!, provider: r.provider,
+  providerRef: r.providerRef ?? undefined, lastEventId: r.lastEventId ?? undefined, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+} as Subscription);
 
 // ---------- Phase 17: national exchange outbox ----------
 export const outboxToRow = (m: OutboxMessage): Row => ({

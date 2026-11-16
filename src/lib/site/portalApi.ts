@@ -37,6 +37,9 @@ import type { MasterPatientIndex } from '../identity/mpi.ts';
 import type { PatientRegistrationService } from '../identity/registration.ts';
 import { NATIONAL_EXCHANGE_SCOPE, type NationalExchangeService } from '../integrations/hie/nationalExchange.ts';
 import type { PharmacyService } from '../integrations/pharmacy.ts';
+import type { BillingService } from '../billing/billingService.ts';
+import type { FacilityOnboardingService } from '../facilities/onboarding.ts';
+import { facilityUsage } from '../facilities/usage.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -85,6 +88,9 @@ export interface PortalContext {
   nationalExchange: NationalExchangeService;
   pharmacy: PharmacyService;
   addFacility: (f: SeedFacility) => void;
+  // Facilities sign up, run their staff and pay (Phase 18)
+  billing: BillingService;
+  onboarding: FacilityOnboardingService;
 }
 
 class HttpError extends Error {
@@ -120,6 +126,8 @@ export function createPortalApi(ctx: PortalContext) {
   const intakeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });   // AI intake (uploads, model calls)
   const pharmacyLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 60 }); // pharmacy access and reads
   const exchangeLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 }); // national exchange queries
+  const facilityRegisterLimiter = new SlidingWindowRateLimiter({ windowMs: 60 * 60_000, maxRequests: 3 }); // facility applications
+  const inviteLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 10 });  // invitation acceptance
   const extraHeaders = new WeakMap<http.IncomingMessage, Record<string, string>>();
   // One token format for clinicians, admins, patients and proxies (auth/sessions.ts). Tokens issued before an
   // account's sessionsNotBefore (sign out everywhere, account recovery) are refused.
@@ -161,6 +169,19 @@ export function createPortalApi(ctx: PortalContext) {
   }
 
   const text = (v: unknown, max: number) => sanitizeClinicalText(typeof v === 'string' ? v : '').slice(0, max);
+
+  /** The raw request body as text (payment webhooks are verified over the exact bytes received). */
+  function readRaw(req: http.IncomingMessage, maxBytes = 256 * 1024): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > maxBytes) { reject(new HttpError(413, 'Payload too large')); req.destroy(); }
+      });
+      req.on('end', () => resolve(body));
+      req.on('error', reject);
+    });
+  }
 
   /** A provider callback body: application/x-www-form-urlencoded (Africa's Talking) or JSON. */
   async function readCallback(req: http.IncomingMessage): Promise<Record<string, string>> {
@@ -248,6 +269,8 @@ export function createPortalApi(ctx: PortalContext) {
 
   function currentClinician(req: http.IncomingMessage): SeedClinician {
     const clinician = authenticate(req);
+    // An admin or staff account is signed in, but is not a clinician: forbidden, not just unauthenticated.
+    if (!clinician && sessions.read(bearerOf(req))?.kind === 'admin') throw new HttpError(403, 'Admin accounts cannot read patient records');
     if (!clinician) throw new HttpError(401, 'Clinician sign-in required');
     return clinician;
   }
@@ -283,7 +306,7 @@ export function createPortalApi(ctx: PortalContext) {
   function adminSession(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } {
     const claims = sessions.read(bearerOf(req));
     const account = claims?.kind === 'admin' ? ctx.accounts.get(claims.subject) : undefined;
-    if (!claims || !account || !['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST'].includes(account.role)) throw new HttpError(401, 'Admin sign-in required');
+    if (!claims || !account || account.disabled || !['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST', 'NURSE'].includes(account.role)) throw new HttpError(401, 'Admin sign-in required');
     return { account, claims };
   }
 
@@ -526,6 +549,9 @@ export function createPortalApi(ctx: PortalContext) {
     // DEMO_MODE=0: a patient or proxy session is required; the patient themself, or a proxy whose scopes cover
     // the route. A proxy's request runs in an acting context, so its audit entries name the proxy.
     if ((m = pathname.match(/^\/api\/patients\/([^/]+)(?:\/(.*))?$/)) && m[1] !== '') {
+      // Staff, admin and machine tokens never open the patient portal (facility admins have no PHI access).
+      const presented = sessions.read(bearerOf(req));
+      if (presented && presented.kind !== 'person') throw new HttpError(403, 'Staff and admin accounts cannot read patient records through the patient portal');
       const person = personSession(req);
       if (!DEMO_MODE && !person) throw new HttpError(401, 'Sign in with your phone number first');
       const patient = ctx.patientsById.get(m[1]);
@@ -798,6 +824,32 @@ export function createPortalApi(ctx: PortalContext) {
 
     // ---------- Admins ----------
     if (pathname.startsWith('/api/admin/')) return adminRoute(req, method, pathname, url);
+
+    // ---------- Facility self-onboarding and invitations (public) ----------
+    if (method === 'POST' && pathname === '/api/facilities/register') {
+      limit(facilityRegisterLimiter, req);
+      return ctx.onboarding.register(await readBody(req, 15 * 1024 * 1024), requestInfo(req));
+    }
+    if (method === 'POST' && pathname === '/api/facilities/invites/accept') {
+      limit(inviteLimiter, req);
+      return ctx.onboarding.startAcceptance((await readBody(req)).token, requestInfo(req));
+    }
+    if (method === 'POST' && pathname === '/api/facilities/invites/verify') {
+      limit(inviteLimiter, req);
+      const body = await readBody(req);
+      const account = ctx.onboarding.completeAcceptance(body.token, body.otp, requestInfo(req));
+      return {
+        token: sessions.issue('admin', account.id, SESSION_TTL_MS), expiresInSeconds: Math.floor(SESSION_TTL_MS / 1000),
+        account: { id: account.id, role: account.role, facilityId: account.facilityId || null, name: account.displayName || null, needsCredentials: !account.passwordHash },
+      };
+    }
+
+    // ---------- Payment provider webhooks (signature or path secret checked; never touches emergency features) ----------
+    if (method === 'POST' && (m = pathname.match(/^\/api\/billing\/webhooks\/(paystack|mpesa)(?:\/([^/]+))?$/))) {
+      limit(webhookLimiter, req);
+      const raw = await readRaw(req);
+      return ctx.billing.handleWebhook(m[1] as 'paystack' | 'mpesa', raw, req.headers as Record<string, string | string[] | undefined>, m[2] ? decodeURIComponent(m[2]) : undefined, requestInfo(req));
+    }
 
     // ---------- Facility systems: FHIR import (client credentials, short-lived token) ----------
     if (method === 'POST' && pathname === '/api/fhir/token') {
@@ -1118,7 +1170,9 @@ export function createPortalApi(ctx: PortalContext) {
       if (grant.clinicianId !== clinician.id && grant.coSignClinicianId !== clinician.id) {
         throw new HttpError(403, 'This grant belongs to another clinician');
       }
-      return { summary: ctx.emergencyEngine.buildEmergencySummary(getPatient(grant.patientId), grant.id) };
+      const summary = ctx.emergencyEngine.buildEmergencySummary(getPatient(grant.patientId), grant.id);
+      ctx.emergencyEngine.recordSummaryView(grant.id, clinician.userId, clinician.facilityId);
+      return { summary };
     }
 
     // National exchange summary under break-glass (Phase 17): the grant's own clinicians, while it is active.
@@ -1228,12 +1282,18 @@ export function createPortalApi(ctx: PortalContext) {
 
     const { account: admin, claims } = adminSession(req);
     // Records officers: registration, patient account links and the duplicate queue only.
-    if (admin.role === 'RECORDS_OFFICER' && !/^\/api\/admin\/(me|logout|patients(\/.*)?|mpi\/.*)$/.test(pathname)) {
+    if (admin.role === 'RECORDS_OFFICER' && !/^\/api\/admin\/(me|logout|credentials|patients(\/.*)?|mpi\/.*)$/.test(pathname)) {
       throw new HttpError(403, 'Records officers can register patients and review duplicates only');
     }
-    if (admin.role === 'PHARMACIST' && !/^\/api\/admin\/(me|logout)$/.test(pathname)) {
-      throw new HttpError(403, 'Pharmacists use the pharmacy API only');
+    if ((admin.role === 'PHARMACIST' || admin.role === 'NURSE') && !/^\/api\/admin\/(me|logout|credentials)$/.test(pathname)) {
+      throw new HttpError(403, admin.role === 'PHARMACIST' ? 'Pharmacists use the pharmacy API only' : 'Nurse workflows are not available yet');
     }
+    // Admin and analytics features need an active subscription (or trial). Emergency, patient and clinical features never do.
+    const requireSubscription = (facilityId: string | undefined) => {
+      if (admin.role === 'PLATFORM_ADMIN' || !facilityId) return;
+      if (!ctx.billing.hasAccess(facilityId)) throw new HttpError(402, 'Your subscription is not active. Renew it to use admin and analytics features. Emergency access, offline scanning and patient records are not affected.');
+    };
+    const ownFacility = () => (admin.role === 'PLATFORM_ADMIN' ? url.searchParams.get('facilityId') || undefined : admin.facilityId);
     if (method === 'GET' && pathname === '/api/admin/me') {
       return { admin: { id: admin.id, role: admin.role, name: admin.displayName, facilityId: admin.facilityId || null } };
     }
@@ -1255,6 +1315,7 @@ export function createPortalApi(ctx: PortalContext) {
     // Facility API clients for EMR integration: created by a facility admin (own facility) or a platform admin.
     if (method === 'GET' && pathname === '/api/admin/facility-api-clients') return { clients: ctx.apiClients.list(admin) };
     if (method === 'POST' && pathname === '/api/admin/facility-api-clients') {
+      requireSubscription(admin.facilityId);
       const { client, clientSecret } = await ctx.apiClients.create(admin, await readBody(req), info);
       return {
         id: client.id, clientId: client.clientId, clientSecret, facilityId: client.facilityId, scopes: client.scopes,
@@ -1269,6 +1330,58 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'POST' && pathname === '/api/admin/facility-admins') {
       const { admin: created, totpEnrolment } = await ctx.staff.createFacilityAdmin(admin, await readBody(req), info);
       return { adminId: created.id, facilityId: created.facilityId, totpEnrolment };
+    }
+
+    // First sign-in after an invitation: set a password and enrol an authenticator (once).
+    if (method === 'POST' && pathname === '/api/admin/credentials') {
+      return ctx.onboarding.setCredentials(admin, (await readBody(req)).password, info);
+    }
+    // Facility applications (platform admin).
+    if (method === 'GET' && pathname === '/api/admin/facility-applications') {
+      return { applications: ctx.onboarding.listApplications(admin, url.searchParams.get('status') || 'PENDING') };
+    }
+    if (method === 'GET' && (m = pathname.match(/^\/api\/admin\/facility-applications\/([^/]+)\/document$/))) {
+      return { document: ctx.onboarding.accreditationDocument(admin, decodeURIComponent(m[1]), info) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/facilities\/([^/]+)\/(verify|reject)$/))) {
+      return ctx.onboarding.review(admin, decodeURIComponent(m[1]), m[2] as 'verify' | 'reject', (await readBody(req)).reason, appBaseUrl(req), info);
+    }
+    // Staff (facility admin): list, invite, suspend/reinstate, reassign. Clinician approval: /api/admin/clinicians.
+    if (method === 'GET' && pathname === '/api/admin/staff') return ctx.onboarding.listStaff(admin, url.searchParams.get('facilityId'));
+    if (method === 'POST' && pathname === '/api/admin/staff/invite') {
+      const body = await readBody(req);
+      requireSubscription(admin.role === 'PLATFORM_ADMIN' ? body.facilityId : admin.facilityId);
+      return ctx.onboarding.inviteStaff(admin, body, appBaseUrl(req), info);
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/staff\/([^/]+)\/(suspend|reinstate|role)$/))) {
+      const body = await readBody(req);
+      const id = decodeURIComponent(m[1]);
+      if (m[2] === 'role') {
+        requireSubscription(admin.facilityId);
+        return ctx.onboarding.changeRole(admin, id, body.role, info);
+      }
+      // Suspending staff is a safety action: never gated by billing.
+      return ctx.onboarding.setSuspended(admin, id, m[2] === 'suspend', body.reason, info);
+    }
+    // Usage dashboard: aggregate counts only, no patient data.
+    if (method === 'GET' && pathname === '/api/admin/usage') {
+      if (admin.role !== 'FACILITY_ADMIN' && admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Admins only');
+      const facilityId = ownFacility();
+      if (!facilityId || !ctx.onboarding.facility(facilityId)) throw new HttpError(400, 'Give the facilityId');
+      requireSubscription(facilityId);
+      return facilityUsage({ auditManager: ctx.auditManager, clinicalStore: ctx.clinicalStore, emergencyEngine: ctx.emergencyEngine }, facilityId, Number(url.searchParams.get('days') || 30));
+    }
+    // Billing (facility admin): plans and subscription; start a test/sandbox checkout.
+    if (method === 'GET' && pathname === '/api/admin/billing') {
+      const facilityId = ownFacility();
+      if (!facilityId) throw new HttpError(400, 'Give the facilityId');
+      return ctx.billing.view(admin, facilityId);
+    }
+    if (method === 'POST' && pathname === '/api/admin/billing/subscribe') {
+      if (admin.role !== 'FACILITY_ADMIN') throw new HttpError(403, 'The facility admin subscribes');
+      if (!ctx.onboarding.isVerified(admin.facilityId!)) throw new HttpError(403, 'This facility is not verified yet');
+      const body = await readBody(req);
+      return ctx.billing.subscribe(admin, admin.facilityId!, body.plan, { email: ctx.accounts.emailOf(admin), phone: ctx.accounts.phoneOf(admin) }, appBaseUrl(req), info);
     }
 
     // National exchange integration view: connector status, last sync, queued, failed (facility admin: own facility).

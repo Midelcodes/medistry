@@ -97,6 +97,7 @@ export class StaffService {
   /** Password (when required) then TOTP. Every failure counts towards the lockout. */
   private async checkFactors(account: UserAccount, totpId: string, password: unknown, totp: unknown, now: number): Promise<void> {
     const accounts = this.deps.accounts;
+    if (account.disabled) throw new AuthError(403, 'This account is suspended. Contact your facility admin.');
     try {
       accounts.assertNotLocked(account, now);
     } catch (err: any) {
@@ -146,7 +147,7 @@ export class StaffService {
   findAdmin(body: { adminId?: unknown; email?: unknown }): UserAccount | undefined {
     const email = normalizeEmail(body.email);
     const account = typeof body.adminId === 'string' && body.adminId ? this.deps.accounts.get(body.adminId) : email ? this.deps.accounts.byEmailAddress(email) : undefined;
-    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST'].includes(account.role) ? account : undefined;
+    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER', 'PHARMACIST', 'NURSE'].includes(account.role) ? account : undefined;
   }
 
   async signInAdmin(admin: UserAccount, password: unknown, totp: unknown, info: RequestInfo, now = Date.now()): Promise<void> {
@@ -154,12 +155,15 @@ export class StaffService {
     this.audit('ADMIN_SIGNED_IN', admin.id, info, `${admin.role} signed in with password and authenticator code`, { facilityId: admin.facilityId });
   }
 
-  /** Demo admins (demo mode only): a platform admin and one facility admin per facility, demo authenticator, no password. */
-  ensureDemoAdmins(): void {
+  /**
+   * Demo admins (demo mode only): a platform admin and one facility admin per seed facility, demo authenticator, no
+   * password. `isSeed` excludes self-registered facilities (Phase 18), whose admins come only from an invitation.
+   */
+  ensureDemoAdmins(isSeed: (f: SeedFacility) => boolean = () => true): void {
     if (!this.deps.demoMode) return;
     const accounts = this.deps.accounts;
     if (!accounts.get('admin-platform-demo')) accounts.create({ id: 'admin-platform-demo', role: 'PLATFORM_ADMIN', countryCode: 'NG', displayName: 'Demo Platform Admin (synthetic)' });
-    for (const f of this.deps.facilities) {
+    for (const f of this.deps.facilities.filter(isSeed)) {
       const id = `admin-${f.id}-demo`;
       if (!accounts.get(id)) accounts.create({ id, role: 'FACILITY_ADMIN', countryCode: f.countryCode, facilityId: f.id, displayName: `Demo Facility Admin, ${f.name} (synthetic)` });
       const ro = `records-${f.id}-demo`;
@@ -257,7 +261,8 @@ export class StaffService {
     if (!licence.valid) throw new AuthError(400, licence.error || 'Invalid licence number');
     // Registry code first; facilities without one (the Nigerian demo facilities) can be named by id.
     const claimed = String(body.facilityRegistryCode || '').trim().toUpperCase();
-    const facility = this.deps.facilities.find((f) => f.countryCode === countryCode && claimed && (f.registryCode?.toUpperCase() === claimed || f.id.toUpperCase() === claimed));
+    // Only verified facilities (Phase 18: self-registered facilities are PENDING until a platform admin verifies them).
+    const facility = this.deps.facilities.find((f) => f.countryCode === countryCode && claimed && (f.registryCode?.toUpperCase() === claimed || f.id.toUpperCase() === claimed) && (f.status || 'VERIFIED') === 'VERIFIED');
     if (!facility) throw new AuthError(400, 'No facility with that registry code in this country');
     const password = this.password(body.password);
     let licenceExpiresOn: string | undefined;

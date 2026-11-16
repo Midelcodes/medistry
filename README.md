@@ -147,6 +147,29 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
   MedicationDispense, only under the patient's consent: a one-time code sent to the patient, or a scan of the
   patient's current card while online. They can never edit a prescription or read other records.
 
+## Facilities: onboarding, staff, usage and billing
+
+- **Self-onboarding.** A facility applies at `/facility-admin` (`POST /api/facilities/register`: name, type,
+  country, registry code, address, admin contact, accreditation document). It stays `PENDING` (not listed, no
+  clinicians, no API clients) until a platform admin reviews the document and verifies it
+  (`POST /api/admin/facilities/:id/verify`, audited `FACILITY_VERIFIED`). Verification starts a trial and sends the
+  first facility admin an invitation link by SMS and email; the link sends a one-time code to their phone, and on
+  first sign-in they set a password and enrol an authenticator.
+- **Facility admin portal** (`/facility-admin`). Staff: invite clinicians (they register with their licence),
+  records officers, nurses and admins; approve `PENDING` clinicians; suspend and reinstate; change roles. API clients
+  and national-exchange connector status. Facility admins still cannot read any patient record (403 everywhere).
+- **Usage dashboard** (`GET /api/admin/usage`): aggregate counts only, no patient data. Offline card scans,
+  break-glass sessions, records added, AI drafts signed, and the average time from break-glass to the summary being
+  opened (null until measured). "Duplicate tests avoided" is not shown: the data cannot measure it, so it is not
+  estimated.
+- **Billing (test/sandbox only).** Plans per facility per month in `src/config/plans.json` (placeholder prices,
+  TODO). `BillingProvider` with `PaystackProvider` (Nigeria) and `MpesaDarajaProvider` (Kenya); a `Subscription`
+  per facility; signed webhooks at `POST /api/billing/webhooks/paystack` and
+  `POST /api/billing/webhooks/mpesa/<DARAJA_CALLBACK_SECRET>`. Only admin and analytics features need an active
+  subscription (usage, new API clients, staff invitations, role changes; HTTP 402 otherwise). Break-glass, offline
+  scanning, patient records, imports, clinician approval and suspending staff never depend on payment.
+- **Patients are never charged** for emergency access or their own records: there is no patient plan.
+
 ## SMS and USSD (feature phones)
 
 - **SMS.** `SMS_PROVIDER=africastalking` sends SMS through Africa's Talking (`AT_USERNAME`, `AT_API_KEY`,
@@ -234,6 +257,7 @@ section 3. Data protection design and open TODOs: `docs/COMPLIANCE.md` sections 
 | `/clinicians` | Clinician console: TOTP sign-in, safe lookup, consent request by one-time code, record view, break-glass sessions, dual co-sign and full history |
 | `/emergency`, `/e/:code` | Emergency code entry and the break-glass gateway |
 | `/facilities` | Facilities and their demo clinicians (licence checked) |
+| `/facility-admin` | Facility application, invitation acceptance, and the facility admin portal (staff, integrations, usage, billing). Demo: `admin-fac-luth-001-demo` |
 | `/contact` | Contact form, stored in `data/contact-messages.jsonl` |
 
 Demo notes: there is no patient login (pick a synthetic patient on the page). Clinician sign-in uses real TOTP verification, and the "Show the current demo code" button is disabled when `NODE_ENV=production`. Pages live in `site/` (`layout.html` + `pages/`), APIs in `src/lib/site/portalApi.ts`.

@@ -180,8 +180,8 @@ describe('Patient routes with DEMO_MODE=0', () => {
     assert.strictEqual((await call('PATCH', `/api/patients/${patientB.id}/settings`, { token: tokenA, ip: '10.2.0.1', body: { publicEmergencyOptIn: true } })).status, 403);
     const own = await get(`/api/patients/${patientA.id}`, { token: tokenA, ip: '10.2.0.1' });
     assert.deepStrictEqual([own.status, own.body.patient.id], [200, patientA.id]);
-    // A clinician or admin token is not a patient session.
-    assert.strictEqual((await get(`/api/patients/${patientA.id}`, { token: adminToken, ip: '10.2.0.1' })).status, 401);
+    // A clinician or admin token is not a patient session (Phase 18: refused outright with 403).
+    assert.strictEqual((await get(`/api/patients/${patientA.id}`, { token: adminToken, ip: '10.2.0.1' })).status, 403);
   });
 
   test('Sign out everywhere revokes existing sessions and is audited', async () => {

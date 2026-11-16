@@ -62,7 +62,8 @@ log('info', 'startup', {
 });
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility } = runtime;
+  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility,
+  billing, onboarding } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -99,6 +100,8 @@ const handlePortalApi = createPortalApi({
   nationalExchange,
   pharmacy,
   addFacility,
+  billing,
+  onboarding,
 });
 
 // Outbox worker: sends due national-exchange messages (retries with backoff, then dead-letters).
@@ -129,6 +132,7 @@ const PAGES: Record<string, PageDef> = {
   // Microphone for voice-note intake (Phase 15); photos use the file picker, which needs no camera permission.
   '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians', permissions: 'camera=(), microphone=(self), geolocation=(), payment=()' },
   '/facilities': { file: 'facilities', nav: 'facilities', title: 'Facilities | Medistry', description: 'Accredited facilities and verified clinicians on Medistry.', script: 'facilities' },
+  '/facility-admin': { file: 'facility-admin', nav: '', title: 'Facility Admin | Medistry', description: 'Run your facility on Medistry: staff, integrations, usage and billing.', script: 'facility-admin' },
   '/status': { file: 'status', nav: '', title: 'Platform Status | Medistry', description: 'Live health of this Medistry environment.', script: 'status' },
   '/contact': { file: 'contact', nav: 'contact', title: 'Contact | Medistry', description: 'Talk to the Medistry team about onboarding, integration or a walkthrough.', script: 'contact' },
 };
@@ -376,7 +380,8 @@ const server = http.createServer(async (req, res) => {
 
     // API: Facilities
     if (method === 'GET' && pathname === '/api/facilities') {
-      sendJson(res, 200, { facilities: seedData.facilities });
+      // Verified facilities only: self-registered ones appear once a platform admin verifies them.
+      sendJson(res, 200, { facilities: seedData.facilities.filter((f) => (f.status || 'VERIFIED') === 'VERIFIED') });
       return;
     }
 
@@ -463,6 +468,7 @@ const server = http.createServer(async (req, res) => {
 
       try {
         const summaryData = emergencyEngine.buildEmergencySummary(patient, grantId);
+        emergencyEngine.recordSummaryView(grant.id, viewer.userId, viewer.facilityId);
         const html = renderEmergencySummaryHtml(summaryData);
         sendHtml(res, 200, html);
       } catch (err: any) {

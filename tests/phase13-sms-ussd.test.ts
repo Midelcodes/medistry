@@ -129,13 +129,14 @@ function assertNoClinical(text: string, where: string) {
 
 describe('SMS templates carry no clinical detail', () => {
   test('No template, in any language, contains blood group, genotype, conditions, medications or allergies', () => {
-    const vars = { doctor: 'Dr. Robert Caldwell', facility: 'Lagos University Teaching Hospital (LUTH)', patient: 'Amara Okonkwo', code: '123456', age: 18, date: '2099-01-01' };
+    const vars = { doctor: 'Dr. Robert Caldwell', facility: 'Lagos University Teaching Hospital (LUTH)', patient: 'Amara Okonkwo', code: '123456', age: 18, date: '2099-01-01', link: 'https://medistry.example/fa#i=abc' };
     for (const locale of Object.keys(SMS_TEMPLATES)) {
       for (const id of SMS_TEMPLATE_IDS) {
         const sms = renderSms(id, locale, vars);
         assertNoClinical(sms, `${locale}/${id}`);
         assert.ok(!/\{\w+\}/.test(sms), `${locale}/${id} fills every placeholder`);
-        if (id !== 'access_alert' && id !== 'contact_alert') assert.ok(sms.length <= 160, `${locale}/${id} is ${sms.length} characters`);
+        // Alerts and invites carry a facility name (and invites a link), so they can run longer with very long names.
+        if (!['access_alert', 'contact_alert', 'staff_invite'].includes(id)) assert.ok(sms.length <= 160, `${locale}/${id} is ${sms.length} characters`);
       }
     }
     process.env.USSD_SERVICE_CODE = '*384*55#';

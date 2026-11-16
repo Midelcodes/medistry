@@ -19,7 +19,7 @@ async function j(path, { method = 'GET', body, token } = {}) {
   return { s: r.status, d };
 }
 
-for (const p of ['/', '/about', '/features', '/how-it-works', '/emergency', '/patients', '/clinicians', '/facilities', '/status', '/contact', '/s']) {
+for (const p of ['/', '/about', '/features', '/how-it-works', '/emergency', '/patients', '/clinicians', '/facilities', '/facility-admin', '/status', '/contact', '/s']) {
   ok((await fetch(B + p)).status === 200, `page ${p}`);
 }
 ok((await fetch(B + '/nope')).status === 404, 'unknown page is 404');

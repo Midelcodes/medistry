@@ -367,6 +367,22 @@ export class EmergencyBreakGlassEngine {
   /**
    * Lists unexpired grants opened by a clinician (newest first).
    */
+  /** Grants opened at a facility since a date (usage dashboard: counts and timings only). */
+  grantsForFacility(facilityId: string, sinceIso: string): Array<{ id: string; grantedAt: string }> {
+    return [...this.grants.values()].filter((g) => g.facilityId === facilityId && g.grantedAt >= sinceIso).map((g) => ({ id: g.id, grantedAt: g.grantedAt }));
+  }
+
+  /** Records that a clinician opened the emergency summary (access log; also gives the time from scan to summary). */
+  recordSummaryView(grantId: string, actorUserId: string, facilityId?: string): void {
+    const grant = this.grants.get(grantId);
+    if (!grant) return;
+    this.auditManager.appendEntry({
+      actorId: actorUserId, subjectId: grant.patientId, action: 'EMERGENCY_SUMMARY_VIEWED', accessType: 'EMERGENCY_BREAK_GLASS',
+      resourceType: 'EmergencyGrant', resourceId: grant.id, facilityId: facilityId || grant.facilityId,
+      ipAddress: '127.0.0.1', userAgent: 'ClinicalEmergencyPortal/1.0', reason: 'Emergency summary opened under the break-glass grant',
+    });
+  }
+
   getActiveGrantsForClinician(clinicianId: string): StoredEmergencyGrant[] {
     const now = Date.now();
     return Array.from(this.grants.values())

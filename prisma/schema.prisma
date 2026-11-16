@@ -143,7 +143,8 @@ model User {
   lockedUntil       DateTime?
   sessionsNotBefore DateTime? // sessions issued earlier are refused (sign out everywhere, account recovery)
   lastSignInAt      DateTime?
-  staffFacilityId   String?   // RECORDS_OFFICER: their facility (facility admins use FacilityAdmin)
+  staffFacilityId   String?   // RECORDS_OFFICER / PHARMACIST / NURSE: their facility (facility admins use FacilityAdmin)
+  disabled          Boolean   @default(false) // suspended by the facility admin (Phase 18)
   // USSD (Phase 13): 4-digit PIN (scrypt hash); locked after 3 wrong PINs until the patient sets a new one in the app
   ussdPinHash       String?
   ussdPinFailures   Int       @default(0)
@@ -674,6 +675,50 @@ model PatientMerge {
   unmergedAt DateTime?
 
   @@index([survivorId])
+}
+
+// Facility self-registration (Phase 18): contact and accreditation document encrypted; PENDING until verified.
+model FacilityApplication {
+  facilityId         String    @id
+  encryptedContact   String
+  documentId         String
+  encryptedFilename  String
+  documentMimeType   String
+  documentSha256     String
+  documentSizeBytes  Int
+  encryptedDocument  String
+  status             String    // PENDING | VERIFIED | REJECTED
+  submittedAt        DateTime
+  reviewedBy         String?
+  reviewedAt         DateTime?
+  rejectionReason    String?
+}
+
+// Staff invitation links: only the token's SHA-256 is stored; single use; expires.
+model StaffInvite {
+  id         String    @id
+  accountId  String
+  facilityId String
+  role       String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdBy  String
+  createdAt  DateTime
+}
+
+// Facility subscriptions (Phase 18). Patients are never billed; emergency features never depend on this.
+model Subscription {
+  id               String   @id
+  facilityId       String   @unique
+  plan             String
+  status           String   // TRIALING | PENDING_PAYMENT | ACTIVE | PAST_DUE | EXPIRED | CANCELLED
+  currentPeriodEnd DateTime
+  provider         String   // trial | paystack | mpesa
+  providerRef      String?
+  lastEventId      String?
+  createdAt        DateTime
+  updatedAt        DateTime
 }
 
 // Outbound sync to a national health information exchange (Phase 17). Ids only: the record is read at send time.

@@ -35,6 +35,8 @@ export interface SeedFacility {
   synthetic?: boolean;
   // Phase 17: what the facility is. Absent = HOSPITAL. LAB submits results; PHARMACY reads medications and dispenses.
   kind?: 'HOSPITAL' | 'CLINIC' | 'LAB' | 'PHARMACY';
+  // Phase 18: self-registered facilities start PENDING until a platform admin verifies them. Absent = VERIFIED.
+  status?: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
 }
 
 export interface SeedClinician {

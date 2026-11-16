@@ -227,7 +227,7 @@ describe('Pharmacies', () => {
     assert.ok(!JSON.stringify(meds.body).match(/allerg|condition|diagnos/i), 'medications only');
     const grant = rt.consentManager.getPatientConsents(patient.id).find((g) => g.targetFacilityId === pharmacyId)!;
     assert.deepStrictEqual(grant.scopes, ['MedicationStatement', 'MedicationDispense']);
-    assert.strictEqual((await call('GET', `/api/clinician/patients/${patient.id}/record`, undefined, pharmacistToken)).status, 401, 'no clinical record access');
+    assert.strictEqual((await call('GET', `/api/clinician/patients/${patient.id}/record`, undefined, pharmacistToken)).status, 403, 'no clinical record access');
   });
 
   test('A pharmacy records dispensing but can never edit a prescription', async () => {

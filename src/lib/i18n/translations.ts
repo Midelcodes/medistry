@@ -327,7 +327,7 @@ export function scannerStrings(): Record<SupportedLocale, Record<string, string>
 export type SmsTemplateId =
   | 'access_alert' | 'contact_alert' | 'sign_in_code' | 'new_phone_code' | 'account_moved' | 'proxy_invite'
   | 'guardian_added' | 'guardian_ended' | 'majority_patient' | 'clinician_approved' | 'clinician_rejected'
-  | 'licence_expiring' | 'licence_expired' | 'lab_result_ready' | 'pharmacy_access_code';
+  | 'licence_expiring' | 'licence_expired' | 'lab_result_ready' | 'pharmacy_access_code' | 'staff_invite';
 
 type SmsFragments = Record<SmsTemplateId | 'action_app_ussd' | 'action_app', string>;
 
@@ -350,6 +350,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Your licence on record with Medistry expired on {date}. Ask your facility admin to re-verify you.',
     lab_result_ready: 'A new result is ready in your Medistry record. Open the app to view it.',
     pharmacy_access_code: 'Your Medistry pharmacy access code is {code}. Share it only with the pharmacist serving you. It expires in 10 minutes.',
+    staff_invite: 'You are invited to Medistry as staff of {facility}. Open this link within 3 days to accept: {link}',
   },
   sw: {
     access_alert: 'Rekodi yako Medistry imefunguliwa na {doctor} katika {facility}. {action}',
@@ -369,6 +370,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Leseni yako iliyo Medistry iliisha tarehe {date}. Mwombe msimamizi wa kituo akuthibitishe tena.',
     lab_result_ready: 'Matokeo mapya yako tayari kwenye rekodi yako ya Medistry. Fungua programu kuyaona.',
     pharmacy_access_code: 'Nambari yako ya ufikiaji wa duka la dawa Medistry ni {code}. Mpe tu mfamasia anayekuhudumia. Itaisha baada ya dakika 10.',
+    staff_invite: 'Umealikwa kwenye Medistry kama mfanyakazi wa {facility}. Fungua kiungo hiki ndani ya siku 3 kukubali: {link}',
   },
   ha: {
     access_alert: '{doctor} a {facility} ya duba bayananka na Medistry. {action}',
@@ -388,6 +390,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Lasisinka da ke Medistry ya kare a ranar {date}. Nemi mai kula da cibiya ya sake tabbatar da kai.',
     lab_result_ready: 'Sabon sakamako ya shirya a bayananka na Medistry. Bude manhajar don gani.',
     pharmacy_access_code: 'Lambar shiga kantin magani na Medistry ita ce {code}. Ka ba mai ba ka magani kadai. Za ta kare bayan minti 10.',
+    staff_invite: "An gayyace ka zuwa Medistry a matsayin ma'aikacin {facility}. Bude wannan mahadar cikin kwana 3 don karba: {link}",
   },
   yo: {
     access_alert: '{doctor} ni {facility} wo akosile Medistry re. {action}',
@@ -407,6 +410,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Iwe-ase re lori Medistry ti pari ni {date}. Beere ki alakoso ile-iwosan jerisi re lekan si.',
     lab_result_ready: 'Esi tuntun ti setan ninu akosile Medistry re. Si app naa lati wo o.',
     pharmacy_access_code: 'Koodu ile-itaja oogun Medistry re ni {code}. Fi han onisegun oogun to n sin o nikan. Yoo pari ni iseju 10.',
+    staff_invite: 'A pe o si Medistry gege bi osise {facility}. Si ona yii laarin ojo 3 lati gba: {link}',
   },
   ig: {
     access_alert: '{doctor} na {facility} lere ndeko Medistry gi anya. {action}',
@@ -426,6 +430,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Akwukwo ikike gi na Medistry agwula na {date}. Rio onye njikwa ulo oru ka o kwado gi ozo.',
     lab_result_ready: 'Nsonaazu ohuru di njikere na ndeko Medistry gi. Mepee app iji lee ya.',
     pharmacy_access_code: 'Koodu ulo ahia ogwu Medistry gi bu {code}. Gosi ya naani onye na-enye gi ogwu. O ga-agwu na nkeji 10.',
+    staff_invite: "Akpoola gi na Medistry dika onye oru {facility}. Mepee njiko a n'ime ubochi 3 iji nabata: {link}",
   },
   fr: {
     access_alert: 'Dossier Medistry consulté par {doctor} à {facility}. {action}',
@@ -445,6 +450,7 @@ export const SMS_TEMPLATES: Record<SupportedLocale, SmsFragments> = {
     licence_expired: 'Votre licence enregistrée sur Medistry a expiré le {date}. Demandez une nouvelle vérification à votre établissement.',
     lab_result_ready: "Un nouveau résultat est disponible dans votre dossier Medistry. Ouvrez l'appli pour le voir.",
     pharmacy_access_code: "Votre code d'accès pharmacie Medistry est {code}. Ne le donnez qu'au pharmacien qui vous sert. Il expire dans 10 minutes.",
+    staff_invite: 'Vous avez été invité sur Medistry au sein de {facility}. Ouvrez ce lien sous 3 jours pour accepter : {link}',
   },
 };
 

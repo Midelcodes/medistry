@@ -269,3 +269,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 8
   .nav-actions .btn-pill-primary .btn-icon-circle { display: none; }
   .nav-emergency-chip { display: none; }
 }
+
+/* Facility admin portal (Phase 18) */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 16px 0; }
+.stat-grid .stat { background: var(--bg-subtle); border-radius: var(--radius-sm); padding: 16px 18px; }
+.stat-grid .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--text-heading); }
+.stat-grid .stat-label { color: var(--text-muted, #6b7280); font-size: 0.9rem; margin-top: 4px; }
+.qr-box { max-width: 220px; margin: 12px 0; }
+.qr-box svg { width: 100%; height: auto; }
+.field-hint { font-weight: 400; color: var(--text-muted, #6b7280); font-size: 0.85em; }

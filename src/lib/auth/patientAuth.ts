@@ -34,7 +34,7 @@ export class AuthError extends Error {
   }
 }
 
-type Purpose = 'sign-in' | 'recovery-email-setup' | 'recovery' | 'recovery-new-phone';
+type Purpose = 'sign-in' | 'recovery-email-setup' | 'recovery' | 'recovery-new-phone' | 'staff-invite';
 
 interface OtpChallenge {
   id: string;
@@ -254,6 +254,22 @@ export class PatientAuthService {
 
   recordSignOut(account: UserAccount, info: RequestInfo): void {
     this.audit('SESSION_REVOKED', account, info, 'Signed out on this device');
+  }
+
+  // ---------- staff invitations (Phase 18): the invite link plus a code to the invitee's own phone ----------
+  async sendStaffInviteCode(account: UserAccount, info: RequestInfo): Promise<{ sent: true; phone: string }> {
+    const phone = this.deps.accounts.phoneOf(account);
+    if (!phone || !account.phoneHash) throw new AuthError(409, 'This invitation has no phone number to send a code to');
+    this.limit(account.phoneHash, info);
+    const { otp } = this.createChallenge('staff-invite', account.phoneHash, { accountId: account.id });
+    await this.smsCode(phone, 'sign_in_code', otp);
+    return { sent: true, phone: maskPhone(phone) };
+  }
+
+  verifyStaffInviteCode(account: UserAccount, otp: unknown, info: RequestInfo): void {
+    const challenge = this.consume('staff-invite', account.phoneHash || '', otp, info);
+    if (challenge.accountId !== account.id) throw new AuthError(401, 'This code is not valid. Request a new code.');
+    this.audit('STAFF_INVITE_CODE_VERIFIED', account, info, 'Invitation accepted with a one-time code sent by SMS');
   }
 
   // ---------- linking a patient record ----------

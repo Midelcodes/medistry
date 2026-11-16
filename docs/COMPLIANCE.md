@@ -133,5 +133,10 @@ These are open. None of them has been done.
       (`PHARMACY_ACCESS_HOURS`).
 - [ ] Decide who may see the duplicate review queue (it shows names and dates of birth side by side) and set
       `MPI_REVIEW_THRESHOLD` from real review outcomes.
+- [ ] Billing: set the real plan prices (`src/config/plans.json`, all placeholders); complete merchant onboarding
+      with Paystack (Nigeria) and Safaricom Daraja (Kenya, Go-Live); confirm invoicing and tax (VAT) requirements in
+      each country (not researched). This build accepts test/sandbox credentials only.
+- [ ] Facility verification: confirm which accreditation document each country's regulator issues and whether the
+      national facility registry can be checked online (`src/lib/facilities/onboarding.ts`).
 - [ ] Confirm the Africa's Talking recipient status codes and delivery-report fields against the current
       documentation (the request format follows the official SDK source; see `src/lib/notifications/africasTalking.ts`).

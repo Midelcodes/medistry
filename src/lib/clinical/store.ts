@@ -575,6 +575,21 @@ export class ClinicalDataStore {
     return record;
   }
 
+  /** Aggregate counts for a facility's usage dashboard (no record content): final records added, AI drafts signed. */
+  facilityRecordCounts(facilityId: string, sinceIso: string): { recordsAdded: number; aiDraftsSigned: number } {
+    let recordsAdded = 0;
+    let aiDraftsSigned = 0;
+    for (const r of this.records.values()) {
+      if (r.originFacilityId !== facilityId || r.status !== 'final' || r.createdAt < sinceIso) continue;
+      // A new record (not a correction): first version, or the signed version of a draft.
+      const prev = r.previousVersionId ? this.records.get(r.previousVersionId) : undefined;
+      if (r.versionId !== 1 && prev?.status !== 'draft') continue;
+      recordsAdded++;
+      if (r.source === 'ai-draft') aiDraftsSigned++;
+    }
+    return { recordsAdded, aiDraftsSigned };
+  }
+
   /** Lab results ordered by a clinician (latest versions), newest first. */
   resultsOrderedBy(clinicianId: string): StoredClinicalRecord[] {
     return [...this.records.values()].filter((r) => r.isLatest && r.status === 'final' && r.orderingClinicianId === clinicianId)
