@@ -4,6 +4,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import net from 'node:net';
 import { signScanEvent } from '../site/js/lib/offlineScan.js';
 
 const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
@@ -20,17 +21,32 @@ function startServer(env: Record<string, string | undefined>, port: number) {
   child.stderr!.on('data', (d) => output.push(String(d)));
   return { child, output };
 }
-async function waitUp(base: string) {
-  for (let i = 0; i < 50; i++) {
+// Ask the OS for a free port (avoids collisions between test files running in parallel).
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, () => {
+      const { port } = s.address() as net.AddressInfo;
+      s.close(() => resolve(port));
+    });
+  });
+}
+// Wait up to 30s for /api/health; fail fast with the server's own output if it exits.
+async function waitUp(base: string, srv?: { child: ChildProcess; output: string[] }) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (srv && srv.child.exitCode !== null) {
+      throw new Error(`server exited (${srv.child.exitCode}):\n${srv.output.join('').slice(-2000)}`);
+    }
     try { if ((await fetch(`${base}/api/health`)).ok) return; } catch { /* starting */ }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error('server did not start');
+  throw new Error(`server did not start in 30s:\n${srv?.output.join('').slice(-2000) ?? ''}`);
 }
 
 describe('Running server with a configured card key', () => {
-  const PORT = 42000 + Math.floor(Math.random() * 1000);
-  const base = `http://localhost:${PORT}`;
+  let base = '';
   let server: { child: ChildProcess; output: string[] };
   let patient: { id: string };
   let token: string;
@@ -38,8 +54,10 @@ describe('Running server with a configured card key', () => {
     fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
   before(async () => {
-    server = startServer({ OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, PORT);
-    await waitUp(base);
+    const port = await freePort();
+    base = `http://localhost:${port}`;
+    server = startServer({ OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, port);
+    await waitUp(base, server);
     patient = (await (await fetch(`${base}/api/patients`)).json()).patients[0];
     token = (await (await fetch(`${base}/api/patients/${patient.id}/offline-card`)).json()).token;
   });
@@ -88,11 +106,11 @@ describe('Running server with a configured card key', () => {
   });
 
   test('CSRF model: new state-changing clinician endpoints ignore the session cookie; the cookie is HttpOnly and SameSite=Strict', async () => {
-    const port2 = PORT + 1;
+    const port2 = await freePort();
     const fresh = startServer({ OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, port2);
     try {
       const b2 = `http://localhost:${port2}`;
-      await waitUp(b2);
+      await waitUp(b2, fresh);
       const clin = (await (await fetch(`${b2}/api/clinicians`)).json()).clinicians[0];
       const totp = (await (await fetch(`${b2}/api/demo/totp/${clin.id}`)).json()).code;
       const login = await fetch(`${b2}/api/clinician/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clinicianId: clin.id, totp }) });
@@ -112,11 +130,11 @@ describe('Running server with a configured card key', () => {
   test('No patient data, tokens or passes in the server logs after a full card flow', async () => {
     const { patient: full } = await (await fetch(`${base}/api/patients/${patient.id}`)).json();
     // A fresh server (fresh rate-limit budget): issue a card, sign in with a device key, upload a scan, flag a record.
-    const port3 = PORT + 2;
+    const port3 = await freePort();
     const s3 = startServer({ OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, port3);
     try {
       const b3 = `http://localhost:${port3}`;
-      await waitUp(b3);
+      await waitUp(b3, s3);
       const p = (await (await fetch(`${b3}/api/patients`)).json()).patients[0];
       const card = await (await fetch(`${b3}/api/patients/${p.id}/offline-card`)).json();
       const clin = (await (await fetch(`${b3}/api/clinicians`)).json()).clinicians[0];
@@ -142,7 +160,7 @@ describe('Running server with a configured card key', () => {
 
 describe('Fail closed in production', () => {
   test('NODE_ENV=production with DEMO_MODE=0 refuses to start without OFFLINE_CARD_PRIVATE_KEY, and starts with it', async () => {
-    const port = 43500 + Math.floor(Math.random() * 400);
+    const port = await freePort();
     const env = { NODE_ENV: 'production', DEMO_MODE: '0', DEPLOYMENT_COUNTRY: 'NG', DEPLOYMENT_REGION: 'test-region', JWT_SECRET: strongHex(), FIELD_ENCRYPTION_KEY: strongHex(), OFFLINE_CARD_PRIVATE_KEY: '' };
     const missing = startServer(env, port);
     const code = await new Promise<number | null>((resolve) => {
@@ -153,12 +171,13 @@ describe('Fail closed in production', () => {
     assert.notStrictEqual(code, -1, 'must exit, not keep running');
     assert.match(missing.output.join(''), /OFFLINE_CARD_PRIVATE_KEY is not set/);
 
-    const withKey = startServer({ ...env, OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, port + 1);
+    const port2 = await freePort();
+    const withKey = startServer({ ...env, OFFLINE_CARD_PRIVATE_KEY: KEY_B64 }, port2);
     try {
-      await waitUp(`http://localhost:${port + 1}`);
+      await waitUp(`http://localhost:${port2}`, withKey);
       // Demo-only routes stay closed outside demo mode
-      assert.strictEqual((await fetch(`http://localhost:${port + 1}/api/patients`)).status, 404);
-      assert.strictEqual((await fetch(`http://localhost:${port + 1}/emergency/offline-card`)).status, 404);
+      assert.strictEqual((await fetch(`http://localhost:${port2}/api/patients`)).status, 404);
+      assert.strictEqual((await fetch(`http://localhost:${port2}/emergency/offline-card`)).status, 404);
     } finally {
       withKey.child.kill();
     }
