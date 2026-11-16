@@ -9,9 +9,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_SIGNS } from "./tews.js";
+import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_SIGNS, normaliseSign } from "./tews.js";
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
-import { emergencySummary, postTriageResult } from "./medistry-client.js";
+import { emergencySummary, postTriageResult, warmUp } from "./medistry-client.js";
 import { verifyOfflineCard } from "./offline-card.js";
 import { BREAK_GLASS_REASONS, normaliseReason } from "./reasons.js";
 import { startupBanner, withValidationBanner } from "./validation.js";
@@ -26,7 +26,7 @@ const obs = {
   trauma: z.boolean().default(false),
 };
 const obsSchema = z.object(obs);
-const signs = z.array(z.enum([...EMERGENCY_SIGNS, ...VERY_URGENT_SIGNS])).default([])
+const signs = z.array(z.preprocess(normaliseSign, z.enum([...EMERGENCY_SIGNS, ...VERY_URGENT_SIGNS]))).default([])
   .describe("Clinical discriminators that can override the numeric score");
 
 const queues = new Map(FACILITIES.map((f) => [f.id, []]));
@@ -184,3 +184,4 @@ server.registerTool("post_triage_to_board", {
 const banner = startupBanner();
 if (banner) console.error(banner);
 await server.connect(new StdioServerTransport());
+warmUp();

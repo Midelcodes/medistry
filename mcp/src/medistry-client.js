@@ -76,6 +76,13 @@ async function api(path, { method = "GET", token, body } = {}) {
 
 let session = null;
 async function signIn() {
+  if (signingIn) return signingIn;
+  signingIn = signInOnce().finally(() => { signingIn = null; });
+  return signingIn;
+}
+let signingIn = null;
+
+async function signInOnce() {
   if (process.env.MEDISTRY_CLINICIAN_TOKEN) return process.env.MEDISTRY_CLINICIAN_TOKEN;
   if (session && session.exp > Date.now() + 10_000) return session.token;
   const demo = process.env.MEDISTRY_DEMO === "1";
@@ -133,4 +140,12 @@ export async function postTriageResult({ grantId, result }) {
   const token = await signIn();
   const r = await api(`/api/emergency/grants/${encodeURIComponent(grantId)}/triage`, { method: "POST", token, body: result });
   return { ...r, boardUrl: BASE + (r.boardUrl || "/clinicians/triage") };
+}
+
+// Signs in ahead of time so the first emergency lookup does not wait for 3 extra round trips.
+// Best effort: any failure is ignored here and surfaces normally on the real call.
+export function warmUp() {
+  if (!process.env.MEDISTRY_URL || process.env.MEDISTRY_FAULT_ONCE) return; // keep the fault demo on the real call
+  try { assertAllowedHost(); } catch { return; }
+  signIn().catch(() => {});
 }
