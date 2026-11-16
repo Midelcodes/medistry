@@ -18,6 +18,10 @@ import { FacilityApiClientStore } from './integrations/apiClients.ts';
 import { FacilityPatientLinkStore, FhirImportService } from './integrations/fhirImport.ts';
 import { createIntakeAdapters } from './intake/adapters.ts';
 import { IntakeService } from './intake/intakeService.ts';
+import { IdentityStore } from './identity/identityStore.ts';
+import { MasterPatientIndex } from './identity/mpi.ts';
+import { createIdentityVerifier } from './identity/IdentityVerifier.ts';
+import { PatientRegistrationService } from './identity/registration.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
 import { OfflineScanService } from './emergency/offlineScans.ts';
@@ -50,6 +54,9 @@ export interface Runtime {
   patientLinks: FacilityPatientLinkStore;
   fhirImport: FhirImportService;
   intake: IntakeService;
+  identity: IdentityStore;
+  mpi: MasterPatientIndex;
+  registration: PatientRegistrationService;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -138,13 +145,21 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
   const documents = new SecureDocumentManager();
   const patientLinks = new FacilityPatientLinkStore();
   const apiClients = new FacilityApiClientStore({ auditManager, facilities: seedData.facilities });
-  const fhirImport = new FhirImportService({ clinicalStore, patientsById, clinicians: seedData.clinicians, consentManager, auditManager, links: patientLinks, documents });
+  // One person, one record (Phase 16): national identifiers (blind index), duplicate review, merge/unmerge.
+  const identity = new IdentityStore();
+  const mpi = new MasterPatientIndex({ patientsById, accounts, auditManager });
+  clinicalStore.linkedPatientIds = (id) => mpi.linkedIds(id);
+  emergencyEngine.mergedProfiles = (id) => mpi.linkedIds(id).map((x) => patientsById.get(x)).filter((p): p is PatientEntity => !!p);
+  const registration = new PatientRegistrationService({
+    seedData, patientsById, patientsByCode, codeByPatient, auditManager, identity, mpi, verifierFor: createIdentityVerifier(), patientAuth,
+  });
+  const fhirImport = new FhirImportService({ clinicalStore, patientsById, clinicians: seedData.clinicians, consentManager, auditManager, links: patientLinks, documents, identity, mpi });
   const intakeAdapters = createIntakeAdapters();
   const intake = new IntakeService({ clinicalStore, auditManager, documents, ...intakeAdapters });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-    accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake,
+    accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake, identity, mpi, registration,
   };
 }
 
@@ -163,6 +178,9 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.apiClients.persistence = persistence;
   rt.patientLinks.persistence = persistence;
   rt.intake.persistence = persistence;
+  rt.identity.persistence = persistence;
+  rt.mpi.persistence = persistence;
+  rt.registration.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins();
   rt.staff.bootstrapPlatformAdmin();
@@ -233,6 +251,8 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.apiClients.hydrate(snapshot.facilityApiClients || []);
   rt.patientLinks.hydrate(snapshot.facilityPatientLinks || []);
   rt.intake.hydrate(snapshot.intakeSessions || []);
+  rt.identity.hydrate(snapshot.patientIdentifiers || []);
+  rt.mpi.hydrate(snapshot.duplicateReviews || [], snapshot.patientMerges || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

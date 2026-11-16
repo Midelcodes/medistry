@@ -111,6 +111,8 @@ export interface PatientEntity {
   userId: string;
   countryCode: string;
   primaryFacilityId?: string;
+  // Set when a reviewer merged this record into another (Phase 16). Nothing else changes; unmerge removes it.
+  mergedIntoPatientId?: string;
 
   // Encrypted demographic fields
   encryptedFirstName: string;

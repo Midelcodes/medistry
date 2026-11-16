@@ -62,7 +62,7 @@ log('info', 'startup', {
 });
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
-  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake } = runtime;
+  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -94,6 +94,8 @@ const handlePortalApi = createPortalApi({
   apiClients,
   fhirImport,
   intake,
+  mpi,
+  registration,
 });
 
 // Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th

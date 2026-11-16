@@ -83,6 +83,8 @@ export class EmergencyBreakGlassEngine {
   private dispatcher: NotificationDispatcher;
   /** Write-through repository (no-op in memory storage). */
   persistence?: Pick<EmergencyGrantRepo, 'saveEmergencyGrant'>;
+  /** Records merged into this patient (Phase 16): their allergies, conditions and medications are shown too. */
+  mergedProfiles?: (patientId: string) => PatientEntity[];
   /** The patient's own sign-in phone and recovery email (from their account), so the patient is alerted too. */
   contactLookup?: (patientId: string) => { phone?: string; email?: string } | undefined;
 
@@ -249,8 +251,15 @@ export class EmergencyBreakGlassEngine {
     const remainingMinutes = Math.max(0, Math.ceil((exp - now) / (1000 * 60)));
     const demo = decryptPatientDemographics(patient);
 
+    // A merged duplicate's safety data must not disappear: union of allergies, conditions and medications.
+    const others = this.mergedProfiles?.(patient.id) || [];
+    const uniq = <T>(xs: T[], key: (x: T) => string) => [...new Map(xs.map((x) => [key(x).toLowerCase(), x])).values()];
+    const allergies = uniq([...patient.allergies, ...others.flatMap((o) => o.allergies)], (a) => a.substance);
+    const chronicConditions = uniq([...patient.chronicConditions, ...others.flatMap((o) => o.chronicConditions)], (c) => c);
+    const activeMedications = uniq([...patient.activeMedications, ...others.flatMap((o) => o.activeMedications)], (m) => m.medicationName);
+
     // Separate drug allergies first (highest priority)
-    const drugAllergiesFirst = patient.allergies
+    const drugAllergiesFirst = allergies
       .filter((a) => a.category === 'drug')
       .map((a) => ({ substance: a.substance, reaction: a.reaction, severity: a.severity }));
 
@@ -272,12 +281,12 @@ export class EmergencyBreakGlassEngine {
       triageEssentials: {
         bloodGroup: patient.bloodGroup.replace('_', ' '),
         genotype: patient.genotype,
-        allergies: patient.allergies,
+        allergies,
         drugAllergiesFirst,
       },
       chronicCare: {
-        chronicConditions: patient.chronicConditions,
-        activeMedications: patient.activeMedications,
+        chronicConditions,
+        activeMedications,
         // Not stored anywhere in this build, so not reported (previously these were filled with assumed values).
         implantsOrDevices: undefined,
         pregnancyStatus: undefined,

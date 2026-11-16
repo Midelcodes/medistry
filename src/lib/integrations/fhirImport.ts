@@ -29,6 +29,24 @@ import type { AuditChainManager } from '../audit/hashChain.ts';
 import type { SecureDocumentManager } from '../clinical/fileUpload.ts';
 import crypto from 'node:crypto';
 import { keyProvider } from '../crypto/keyProvider.ts';
+import type { IdentityStore } from '../identity/identityStore.ts';
+import { REVIEW_THRESHOLD, type MasterPatientIndex } from '../identity/mpi.ts';
+
+/**
+ * FHIR identifier systems for national identifiers (Phase 16): Medistry's own namespace by default
+ * ("urn:medistry:id:<country>:<idType>", e.g. urn:medistry:id:NG:NIN), plus aliases from
+ * IDENTITY_FHIR_SYSTEMS ("<system uri>=<country>:<idType>,..."). No official system URIs are assumed.
+ */
+export function nationalIdentifierFor(system: string, env: NodeJS.ProcessEnv = process.env): { country: string; idType: string } | null {
+  const own = /^urn:medistry:id:([A-Z]{2}):([A-Z_]{2,20})$/.exec(system);
+  if (own) return { country: own[1], idType: own[2] };
+  for (const pair of (env.IDENTITY_FHIR_SYSTEMS || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const at = pair.lastIndexOf('=');
+    const [country, idType] = pair.slice(at + 1).split(':');
+    if (at > 0 && pair.slice(0, at) === system && country && idType) return { country: country.toUpperCase(), idType: idType.toUpperCase() };
+  }
+  return null;
+}
 
 /**
  * Keyed hash of a facility identifier (e.g. an MRN) for lookups, under a field key version (default current).
@@ -128,6 +146,7 @@ export class FhirImportService {
   private deps: {
     clinicalStore: ClinicalDataStore; patientsById: Map<string, PatientEntity>; clinicians: SeedClinician[];
     consentManager: ConsentLifecycleManager; auditManager: AuditChainManager; links: FacilityPatientLinkStore; documents: SecureDocumentManager;
+    identity?: IdentityStore; mpi?: MasterPatientIndex;
   };
 
   constructor(deps: FhirImportService['deps']) {
@@ -254,13 +273,25 @@ export class FhirImportService {
         const ids: any[] = Array.isArray(r.identifier) ? r.identifier.filter((x: any) => typeof x?.system === 'string' && typeof x?.value === 'string') : [];
         const matches = new Set<string>();
         for (const id of ids) {
-          const m = id.system === MEDISTRY_PATIENT_ID_SYSTEM ? (this.deps.patientsById.has(id.value) ? id.value : undefined) : this.deps.links.find(client.facilityId, id.system, id.value);
-          if (m) matches.add(m);
+          const national = nationalIdentifierFor(id.system);
+          const m = id.system === MEDISTRY_PATIENT_ID_SYSTEM ? (this.deps.patientsById.has(id.value) ? id.value : undefined)
+            : national ? this.deps.identity?.findPatient(national.country, national.idType, id.value) // blind index, exact match
+            : this.deps.links.find(client.facilityId, id.system, id.value);
+          if (m) matches.add(this.deps.mpi ? this.deps.mpi.canonical(m) : m);
         }
         if (matches.size !== 1) {
+          // No exact match: probable matches are reported (never used to file records, never auto-linked).
+          let probable = 0;
+          if (!matches.size && this.deps.mpi && r.birthDate) {
+            const name = [...(r.name?.[0]?.given || []), r.name?.[0]?.family].filter(Boolean).join(' ') || r.name?.[0]?.text || '';
+            const phone = (r.telecom || []).find((t: any) => t?.system === 'phone')?.value;
+            probable = this.deps.mpi.findCandidates({ name, dob: r.birthDate, gender: r.gender, phone: phone ? String(phone).replace(/[\s().-]/g, '') : undefined })
+              .filter((c) => c.score >= REVIEW_THRESHOLD).length;
+          }
           issues.push({
             severity: 'error', code: matches.size ? 'duplicate' : 'not-found', expression: [`${at}.identifier`],
-            diagnostics: matches.size ? 'Patient identifiers match more than one Medistry patient' : 'No identity match for this Patient. Medistry never creates patients from imports; link the patient first.',
+            diagnostics: matches.size ? 'Patient identifiers match more than one Medistry patient'
+              : `No identity match for this Patient. Medistry never creates patients from imports; link the patient first.${probable ? ` ${probable} probable match(es) exist: a records officer must confirm the identity (for example by adding a national identifier).` : ''}`,
           });
           return;
         }

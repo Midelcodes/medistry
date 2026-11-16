@@ -33,6 +33,8 @@ import { log } from '../ops/logger.ts';
 import { API_TOKEN_TTL_SECONDS, type FacilityApiClientStore, type FacilityApiClient } from '../integrations/apiClients.ts';
 import type { FhirImportService } from '../integrations/fhirImport.ts';
 import type { IntakeService } from '../intake/intakeService.ts';
+import type { MasterPatientIndex } from '../identity/mpi.ts';
+import type { PatientRegistrationService } from '../identity/registration.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
 import { appBaseUrl, appSecret, clientIp, DEMO_MODE, parseCookies, SESSION_COOKIE, SESSION_TTL_MS } from '../security/config.ts';
 import { buildOfflineCardBundle, cardLocale } from '../emergency/offlineCard.ts';
@@ -74,6 +76,9 @@ export interface PortalContext {
   apiClients: FacilityApiClientStore;
   fhirImport: FhirImportService;
   intake: IntakeService;
+  // One person, one record (Phase 16)
+  mpi: MasterPatientIndex;
+  registration: PatientRegistrationService;
 }
 
 class HttpError extends Error {
@@ -270,7 +275,7 @@ export function createPortalApi(ctx: PortalContext) {
   function adminSession(req: http.IncomingMessage): { account: UserAccount; claims: SessionClaims } {
     const claims = sessions.read(bearerOf(req));
     const account = claims?.kind === 'admin' ? ctx.accounts.get(claims.subject) : undefined;
-    if (!claims || !account || (account.role !== 'FACILITY_ADMIN' && account.role !== 'PLATFORM_ADMIN')) throw new HttpError(401, 'Admin sign-in required');
+    if (!claims || !account || !['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role)) throw new HttpError(401, 'Admin sign-in required');
     return { account, claims };
   }
 
@@ -386,8 +391,10 @@ export function createPortalApi(ctx: PortalContext) {
     return filters;
   }
 
+  /** Patient for an emergency code. A merged record's code leads to the surviving record (Phase 16). */
   function lookupByCode(input: string): PatientEntity | undefined {
-    return ctx.patientsByCode.get(normalizePatientCode(input));
+    const p = ctx.patientsByCode.get(normalizePatientCode(input));
+    return p?.mergedIntoPatientId ? ctx.patientsById.get(ctx.mpi.canonical(p.id)) : p;
   }
 
   function slimTimeline(items: ReturnType<ClinicalTimelineEngine['getTimeline']>) {
@@ -429,7 +436,7 @@ export function createPortalApi(ctx: PortalContext) {
         return true;
       }
       const status = typeof err?.status === 'number' ? err.status : /Forbidden|Unauthorized/.test(err?.message || '') ? 403 : 400;
-      sendJson(res, status, { error: err?.message || 'Request failed' });
+      sendJson(res, status, { error: err?.message || 'Request failed', ...(err?.mergedInto ? { mergedInto: err.mergedInto } : {}) });
       return true;
     }
   }
@@ -516,6 +523,9 @@ export function createPortalApi(ctx: PortalContext) {
       const patient = ctx.patientsById.get(m[1]);
       const sub = m[2] || '';
       if (!patient) throw new HttpError(person || DEMO_MODE ? 404 : 401, 'Patient not found');
+      if (patient.mergedIntoPatientId) {
+        throw Object.assign(new HttpError(409, 'This record was merged into another record. Open the surviving record.'), { mergedInto: ctx.mpi.canonical(patient.id) });
+      }
       const acting = person ? ctx.proxies.authorize(person.account, patient, scopeFor(method, sub)) : null;
       return runActing(acting, () => patientRoute(req, method, sub, url, patient, person?.account ?? null, acting));
     }
@@ -1156,6 +1166,10 @@ export function createPortalApi(ctx: PortalContext) {
     }
 
     const { account: admin, claims } = adminSession(req);
+    // Records officers: registration, patient account links and the duplicate queue only.
+    if (admin.role === 'RECORDS_OFFICER' && !/^\/api\/admin\/(me|logout|patients(\/.*)?|mpi\/.*)$/.test(pathname)) {
+      throw new HttpError(403, 'Records officers can register patients and review duplicates only');
+    }
     if (method === 'GET' && pathname === '/api/admin/me') {
       return { admin: { id: admin.id, role: admin.role, name: admin.displayName, facilityId: admin.facilityId || null } };
     }
@@ -1191,6 +1205,27 @@ export function createPortalApi(ctx: PortalContext) {
     if (method === 'POST' && pathname === '/api/admin/facility-admins') {
       const { admin: created, totpEnrolment } = await ctx.staff.createFacilityAdmin(admin, await readBody(req), info);
       return { adminId: created.id, facilityId: created.facilityId, totpEnrolment };
+    }
+
+    // Patient registration with identity checks; probable duplicates go to the review queue (never merged here).
+    if (method === 'POST' && pathname === '/api/admin/patients') {
+      return ctx.registration.register(admin, await readBody(req), info);
+    }
+    if (method === 'POST' && pathname === '/api/admin/records-officers') {
+      const { officer, totpEnrolment } = await ctx.staff.createRecordsOfficer(admin, await readBody(req), info);
+      return { officerId: officer.id, facilityId: officer.facilityId, totpEnrolment };
+    }
+    // Duplicate review queue, merge and unmerge: a records officer of a facility involved, or a platform admin.
+    if (method === 'GET' && pathname === '/api/admin/mpi/reviews') {
+      return { reviews: ctx.mpi.listReviews(admin, url.searchParams.get('status') || 'OPEN', info) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/mpi\/reviews\/([^/]+)\/(merge|dismiss)$/))) {
+      const body = await readBody(req);
+      if (m[2] === 'dismiss') return { review: ctx.mpi.dismiss(admin, decodeURIComponent(m[1]), info) };
+      return { merge: ctx.mpi.merge(admin, { reviewId: decodeURIComponent(m[1]), survivorId: body.survivorId }, info) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/mpi\/merges\/([^/]+)\/unmerge$/))) {
+      return { merge: ctx.mpi.unmerge(admin, decodeURIComponent(m[1]), info) };
     }
 
     // Patient accounts: a facility admin of the patient's primary facility, or a platform admin, after an

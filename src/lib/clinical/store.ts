@@ -84,6 +84,8 @@ export class ClinicalDataStore {
   private finalListeners: Array<(event: FinalRecordEvent) => void> = [];
   /** Write-through repository (no-op in memory storage). */
   persistence?: RecordRepo;
+  /** Patient ids merged into a survivor (Phase 16): their records count as the survivor's history too. */
+  linkedPatientIds?: (patientId: string) => string[];
 
   constructor(auditManager: AuditChainManager) {
     this.auditManager = auditManager;
@@ -127,6 +129,11 @@ export class ClinicalDataStore {
       });
       throw new Error('Forbidden: author is not linked to this facility');
     }
+  }
+
+  /** Record ids for a patient, including records of patients merged into it (both histories, nothing moved). */
+  private idsFor(patientId: string): string[] {
+    return [patientId, ...(this.linkedPatientIds?.(patientId) || [])].flatMap((id) => this.patientIndex.get(id) || []);
   }
 
   /**
@@ -535,7 +542,7 @@ export class ClinicalDataStore {
     const action = actor.role === 'DOCTOR' ? 'PATIENT_WRITE_RECORD' : 'PATIENT_DRAFT_RECORD';
     const decision = evaluatePolicy({ actor, action, targetPatientId: patientId, activeConsent: consent });
     if (!decision.allowed) throw new Error(`Forbidden: ${decision.reason}`);
-    return (this.patientIndex.get(patientId) || [])
+    return this.idsFor(patientId)
       .map((id) => this.records.get(id)!)
       .filter((r) => r.status === 'draft' && r.isLatest)
       .map((record) => ({ record, resource: this.decrypt(record) }));
@@ -573,7 +580,7 @@ export class ClinicalDataStore {
       throw new Error(`Forbidden: ${policyDecision.reason}`);
     }
 
-    const recordIds = this.patientIndex.get(patientId) || [];
+    const recordIds = this.idsFor(patientId);
     const results: Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> = [];
 
     for (const id of recordIds) {
@@ -629,7 +636,7 @@ export class ClinicalDataStore {
     }
 
     const results: Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> = [];
-    for (const id of this.patientIndex.get(patientId) || []) {
+    for (const id of this.idsFor(patientId)) {
       const stored = this.records.get(id);
       if (!stored || !stored.isLatest || stored.status !== 'final') continue;
       results.push({ record: stored, resource: JSON.parse(decryptField(stored.encryptedPayload)) });
@@ -654,7 +661,7 @@ export class ClinicalDataStore {
    * for callers that are already authorised (see clinical/encounters.ts). Drafts are never returned.
    */
   getLatestFinalRecords(patientId: string, resourceType: string): Array<{ record: StoredClinicalRecord; resource: AnyClinicalFHIRResource }> {
-    return (this.patientIndex.get(patientId) || [])
+    return this.idsFor(patientId)
       .map((id) => this.records.get(id)!)
       .filter((r) => r && r.isLatest && r.status === 'final' && r.resourceType === resourceType)
       .map((record) => ({ record, resource: this.decrypt(record) }));

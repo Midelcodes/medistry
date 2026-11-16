@@ -74,6 +74,7 @@ in the source text) and saved only as drafts; nothing becomes part of a record u
 | First admin | `PLATFORM_ADMIN_EMAIL`, `PLATFORM_ADMIN_PASSWORD_HASH`, `PLATFORM_ADMIN_TOTP_SECRET` (`scripts/admin-credentials.ts`) |
 | SMS / USSD | `SMS_PROVIDER=africastalking`, `AT_*`, `SMS_WEBHOOK_SECRET`, `USSD_CALLBACK_SECRET`, `USSD_SERVICE_CODE` (README, "SMS and USSD") |
 | One instance | One application instance per database (README, "Status and known limits") |
+| Identity | `IDENTITY_INDEX_KEY` (64 hex, separate from the field key; required with Postgres) for the national-identifier blind index. With `DEMO_MODE=0` the NIN (NIMC) and Kenyan ID verifiers are stubs that answer "unavailable" until the official channels are integrated; registration still works and marks identifiers unverified. Records officers (`POST /api/admin/records-officers`) review the duplicate queue. Changing `IDENTITY_INDEX_KEY` needs a re-index (TODO, not scripted). |
 | EMR integration | A facility admin creates an API client (`POST /api/admin/facility-api-clients`); the EMR exchanges it at `POST /api/fhir/token` (client credentials, `API_TOKEN_TTL_SECONDS`, default 300) and pushes FHIR R4 bundles to `POST /api/fhir/import`. The OpenMRS/KenyaEMR pull connector reads `OPENMRS_BASE_URL`, `OPENMRS_USERNAME`, `OPENMRS_PASSWORD` (site-specific mapping TODOs in `src/lib/integrations/emr/OpenMrsConnector.ts`). |
 
 `GET /api/health` reports `version`, `uptimeSeconds`, `storage` (mode, pending and failed writes, status) and

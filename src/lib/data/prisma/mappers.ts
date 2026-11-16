@@ -26,6 +26,8 @@ import type { NotificationDelivery } from '../../notifications/deliveries.ts';
 import type { FacilityApiClient } from '../../integrations/apiClients.ts';
 import type { FacilityPatientLink } from '../../integrations/fhirImport.ts';
 import type { IntakeSession } from '../../intake/intakeService.ts';
+import type { PatientIdentifier } from '../../identity/identityStore.ts';
+import type { DuplicateReview, PatientMerge } from '../../identity/mpi.ts';
 
 type Row = Record<string, any>;
 
@@ -78,17 +80,37 @@ export const userAccountToRows = (a: UserAccount) => ({
     failedSignIns: a.failedSignIns, lockedUntil: date(a.lockedUntil), sessionsNotBefore: date(a.sessionsNotBefore),
     lastSignInAt: date(a.lastSignInAt), createdAt: new Date(a.createdAt),
     ussdPinHash: a.ussdPinHash ?? null, ussdPinFailures: a.ussdPinFailures ?? 0, ussdLocked: !!a.ussdLocked,
+    staffFacilityId: a.role === 'RECORDS_OFFICER' ? a.facilityId ?? null : null,
   },
   facilityAdmin: a.role === 'FACILITY_ADMIN' && a.facilityId ? { userId: a.id, facilityId: a.facilityId } : null,
 });
 export const rowToUserAccount = (r: Row): UserAccount => clean({
-  id: r.id, role: r.role, countryCode: r.countryCode, displayName: r.displayName ?? undefined, facilityId: r.facilityAdmin?.facilityId ?? undefined,
+  id: r.id, role: r.role, countryCode: r.countryCode, displayName: r.displayName ?? undefined, facilityId: r.facilityAdmin?.facilityId ?? r.staffFacilityId ?? undefined,
   phoneHash: r.phoneHash ?? undefined, encryptedPhone: r.encryptedPhone ?? undefined, emailHash: r.emailHash ?? undefined, encryptedEmail: r.encryptedEmail ?? undefined,
   passwordHash: r.passwordHash ?? undefined, encryptedTotpSecret: r.twoFactorSecret ?? undefined, totpEnabled: !!r.twoFactorEnabled,
   failedSignIns: r.failedSignIns ?? 0, lockedUntil: iso(r.lockedUntil), sessionsNotBefore: iso(r.sessionsNotBefore),
   lastSignInAt: iso(r.lastSignInAt), createdAt: iso(r.createdAt)!,
   ussdPinHash: r.ussdPinHash ?? undefined, ussdPinFailures: r.ussdPinFailures || undefined, ussdLocked: r.ussdLocked || undefined,
 } as UserAccount);
+
+// ---------- Phase 16: national identifiers, duplicate reviews, merges ----------
+export const identifierToRow = (i: PatientIdentifier): Row => ({ ...i, verifiedAt: date(i.verifiedAt), createdAt: new Date(i.createdAt) });
+export const rowToIdentifier = (r: Row): PatientIdentifier => clean({
+  id: r.id, patientId: r.patientId, country: r.country, idType: r.idType, blindIndex: r.blindIndex, encryptedValue: r.encryptedValue,
+  last2: r.last2, status: r.status, matchScore: r.matchScore, verifier: r.verifier, verifiedAt: iso(r.verifiedAt), createdAt: iso(r.createdAt)!,
+} as PatientIdentifier);
+export const reviewToRow = (x: DuplicateReview): Row => ({ ...x, reviewedBy: x.reviewedBy ?? null, createdAt: new Date(x.createdAt), reviewedAt: date(x.reviewedAt) });
+export const rowToReview = (r: Row): DuplicateReview => clean({
+  id: r.id, patientId: r.patientId, candidatePatientId: r.candidatePatientId, score: r.score, breakdown: r.breakdown, facilityId: r.facilityId,
+  source: r.source, status: r.status, createdAt: iso(r.createdAt)!, reviewedBy: r.reviewedBy ?? undefined, reviewedAt: iso(r.reviewedAt),
+} as DuplicateReview);
+export const mergeToRow = (m: PatientMerge): Row => ({
+  ...m, reviewId: m.reviewId ?? null, unmergedBy: m.unmergedBy ?? null, mergedAt: new Date(m.mergedAt), unmergedAt: date(m.unmergedAt),
+});
+export const rowToMerge = (r: Row): PatientMerge => clean({
+  id: r.id, survivorId: r.survivorId, mergedId: r.mergedId, reviewId: r.reviewId ?? undefined, mergedBy: r.mergedBy, mergedAt: iso(r.mergedAt)!,
+  status: r.status, unmergedBy: r.unmergedBy ?? undefined, unmergedAt: iso(r.unmergedAt),
+} as PatientMerge);
 
 // ---------- Phase 15: facility API clients, identifier links, intake sessions ----------
 export const apiClientToRow = (c: FacilityApiClient): Row => ({ ...c, createdAt: new Date(c.createdAt), lastUsedAt: date(c.lastUsedAt) });
@@ -164,7 +186,7 @@ export function patientToRows(p: PatientEntity) {
       encryptedEmergencyProfile: encryptField(JSON.stringify(profile)),
       cardMedicationIds: p.cardMedicationIds, cardIncludeRecentDiagnosis: p.cardIncludeRecentDiagnosis,
       cardVersion: p.cardVersion, cardStale: p.cardStale, preferredLocale: p.preferredLocale ?? null,
-      countryCode: p.countryCode, primaryFacilityId: p.primaryFacilityId ?? null,
+      countryCode: p.countryCode, primaryFacilityId: p.primaryFacilityId ?? null, mergedIntoPatientId: p.mergedIntoPatientId ?? null,
       createdAt: new Date(p.createdAt), updatedAt: new Date(p.updatedAt),
     },
   };
@@ -172,7 +194,7 @@ export function patientToRows(p: PatientEntity) {
 export function rowToPatient(r: Row): PatientEntity {
   const profile = JSON.parse(decryptField(r.encryptedEmergencyProfile));
   return clean({
-    id: r.id, userId: r.userId, countryCode: r.countryCode, primaryFacilityId: r.primaryFacilityId ?? undefined,
+    id: r.id, userId: r.userId, countryCode: r.countryCode, primaryFacilityId: r.primaryFacilityId ?? undefined, mergedIntoPatientId: r.mergedIntoPatientId ?? undefined,
     encryptedFirstName: r.encryptedFirstName, encryptedLastName: r.encryptedLastName, encryptedDob: r.encryptedDob,
     gender: r.gender, encryptedNin: r.encryptedNin ?? undefined, photoUrl: r.photoUrl ?? undefined,
     bloodGroup: r.bloodGroup, genotype: r.genotype, advanceDirectiveDnr: r.advanceDirectiveDnr, organDonor: r.organDonor,

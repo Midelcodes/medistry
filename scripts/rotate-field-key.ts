@@ -32,6 +32,7 @@ const TARGETS: Array<{ model: string; id: string; columns: string[] }> = [
   { model: 'auditLog', id: 'id', columns: ['encryptedReason'] }, // the audit hash covers the plaintext, so the chain is unaffected
   { model: 'intakeSession', id: 'id', columns: ['encryptedSourceText', 'encryptedFile', 'encryptedProposals'] },
   { model: 'facilityPatientLink', id: 'valueHash', columns: ['encryptedValue'] }, // lookups try every key version meanwhile
+  { model: 'patientIdentifier', id: 'id', columns: ['encryptedValue'] }, // the blind index uses IDENTITY_INDEX_KEY, unaffected
 ];
 
 async function main(): Promise<number> {

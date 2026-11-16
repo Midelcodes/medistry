@@ -107,6 +107,24 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
   model is a deterministic local stand-in; real models and OCR/speech-to-text providers are pluggable (see
   docs/DEPLOYMENT.md for the rules on real patient data).
 
+## One person, one record
+
+- **Registration** (`POST /api/admin/patients`, by a facility admin, a records officer or a platform admin) checks
+  national identifiers first: an exact match on the blind index (HMAC-SHA256 under `IDENTITY_INDEX_KEY`, separate from
+  the field key) is the same person, so the existing record is returned. Identifiers are verified through the
+  country's adapter: NG NIN through NIMC or a licensed partner and KE national ID / SHA number are stubs (TODO: the
+  official channels); demo mode uses a synthetic register. `mismatch` or `not_found` stops the registration;
+  `unavailable` never does, and emergency care never waits for verification. Raw numbers are never stored or logged.
+- **Probable duplicates** (normalised name, date of birth, gender, phone) at or above `MPI_REVIEW_THRESHOLD` (0.8) go
+  to a review queue (`/api/admin/mpi/reviews`) for a records officer of the facility involved or a platform admin.
+  Nothing is merged automatically. Names are compared as unordered tokens with diacritics folded, titles and
+  connective particles removed, and compounds tried joined, so name-order swaps and extra given names still match.
+- **Merge** links the duplicate under the surviving record: nothing is moved, both histories stay, the survivor's
+  views (record, emergency summary) include the merged record's history and safety data, and the merged record's
+  emergency code opens the survivor. **Unmerge** removes the link and restores both records exactly. Both audited.
+- **FHIR import** matches Patient entries by national identifier too (`urn:medistry:id:<country>:<idType>`, or aliases
+  in `IDENTITY_FHIR_SYSTEMS`); probable matches are reported, never used to file records.
+
 ## SMS and USSD (feature phones)
 
 - **SMS.** `SMS_PROVIDER=africastalking` sends SMS through Africa's Talking (`AT_USERNAME`, `AT_API_KEY`,

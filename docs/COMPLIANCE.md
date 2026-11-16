@@ -123,5 +123,10 @@ These are open. None of them has been done.
 - [ ] Provision the USSD short code with the provider and each telco, and confirm any sender-ID registration
       the SMS provider or regulators require in each country (not researched; the code only reads `AT_SENDER_ID`).
 - [ ] Native-speaker review of the Swahili, Hausa, Yoruba, Igbo and French SMS templates.
+- [ ] NIN verification: obtain access through NIMC or a licensed verification partner (contract, permitted purpose,
+      consent wording, data handling). Never use an unofficial NIN lookup service. (`src/lib/identity/IdentityVerifier.ts`)
+- [ ] Kenya: confirm the official channel and legal basis for national ID and SHA number verification.
+- [ ] Decide who may see the duplicate review queue (it shows names and dates of birth side by side) and set
+      `MPI_REVIEW_THRESHOLD` from real review outcomes.
 - [ ] Confirm the Africa's Talking recipient status codes and delivery-report fields against the current
       documentation (the request format follows the official SDK source; see `src/lib/notifications/africasTalking.ts`).

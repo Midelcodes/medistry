@@ -78,7 +78,7 @@ export class StaffService {
     const account = this.deps.accounts.get(clinician ? clinician.userId : id);
     if (account?.encryptedTotpSecret) return null;
     if (clinician) return this.derivedSecret(id);
-    return account && (account.role === 'FACILITY_ADMIN' || account.role === 'PLATFORM_ADMIN') ? this.derivedSecret(id) : null;
+    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role) ? this.derivedSecret(id) : null;
   }
 
   private enrolment(label: string): { secret: string; enrolment: TotpEnrolment } {
@@ -146,7 +146,7 @@ export class StaffService {
   findAdmin(body: { adminId?: unknown; email?: unknown }): UserAccount | undefined {
     const email = normalizeEmail(body.email);
     const account = typeof body.adminId === 'string' && body.adminId ? this.deps.accounts.get(body.adminId) : email ? this.deps.accounts.byEmailAddress(email) : undefined;
-    return account && (account.role === 'FACILITY_ADMIN' || account.role === 'PLATFORM_ADMIN') ? account : undefined;
+    return account && ['FACILITY_ADMIN', 'PLATFORM_ADMIN', 'RECORDS_OFFICER'].includes(account.role) ? account : undefined;
   }
 
   async signInAdmin(admin: UserAccount, password: unknown, totp: unknown, info: RequestInfo, now = Date.now()): Promise<void> {
@@ -162,7 +162,31 @@ export class StaffService {
     for (const f of this.deps.facilities) {
       const id = `admin-${f.id}-demo`;
       if (!accounts.get(id)) accounts.create({ id, role: 'FACILITY_ADMIN', countryCode: f.countryCode, facilityId: f.id, displayName: `Demo Facility Admin, ${f.name} (synthetic)` });
+      const ro = `records-${f.id}-demo`;
+      if (!accounts.get(ro)) accounts.create({ id: ro, role: 'RECORDS_OFFICER', countryCode: f.countryCode, facilityId: f.id, displayName: `Demo Records Officer, ${f.name} (synthetic)` });
     }
+  }
+
+  /** A facility admin (own facility) or platform admin creates a records officer. Returns the authenticator enrolment once. */
+  async createRecordsOfficer(by: UserAccount, body: any, info: RequestInfo): Promise<{ officer: UserAccount; totpEnrolment: TotpEnrolment }> {
+    if (by.role !== 'FACILITY_ADMIN' && by.role !== 'PLATFORM_ADMIN') throw new AuthError(403, 'Only facility or platform admins create records officers');
+    const facilityId = by.role === 'FACILITY_ADMIN' ? by.facilityId : body.facilityId;
+    const facility = this.deps.facilities.find((f) => f.id === facilityId);
+    const fullName = text(body.name, 120);
+    const email = normalizeEmail(body.email);
+    if (!facility) throw new AuthError(400, 'Unknown facility');
+    if (fullName.length < 3) throw new AuthError(400, 'Give the records officer\'s full name');
+    if (!email) throw new AuthError(400, 'Give a valid email address');
+    const password = this.password(body.password);
+    if (this.deps.accounts.byEmailAddress(email)) throw new AuthError(409, 'This email address belongs to another account');
+    const { secret, enrolment } = this.enrolment(email);
+    const officer = this.deps.accounts.create({
+      id: `records-${crypto.randomUUID()}`, role: 'RECORDS_OFFICER', countryCode: facility.countryCode, facilityId: facility.id, displayName: fullName,
+      passwordHash: await hashPassword(password), encryptedTotpSecret: encryptField(secret),
+    });
+    this.deps.accounts.setEmail(officer, email);
+    this.audit('RECORDS_OFFICER_CREATED', by.id, info, `Records officer ${officer.id} created`, { facilityId: facility.id });
+    return { officer, totpEnrolment: enrolment };
   }
 
   /**

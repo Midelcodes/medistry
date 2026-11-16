@@ -24,6 +24,7 @@ export function assertPostgresSecrets(env: NodeJS.ProcessEnv = process.env): voi
   if (!/^[0-9a-fA-F]{64}$/.test((env.FIELD_ENCRYPTION_KEY || '').trim())) missing.push('FIELD_ENCRYPTION_KEY (64 hex characters)');
   if ((env.JWT_SECRET || '').trim().length < 32) missing.push('JWT_SECRET (32+ characters)');
   if (!(env.OFFLINE_CARD_PRIVATE_KEY || '').trim()) missing.push('OFFLINE_CARD_PRIVATE_KEY (node scripts/gen-card-key.mjs)');
+  if (!/^[0-9a-fA-F]{64}$/.test((env.IDENTITY_INDEX_KEY || '').trim())) missing.push('IDENTITY_INDEX_KEY (64 hex characters, not the field key)');
   if (missing.length) {
     throw new Error(`STORAGE=postgres needs stable secrets so stored data stays readable after a restart. Set: ${missing.join(', ')}.`);
   }

@@ -9,14 +9,15 @@ import crypto from 'node:crypto';
 import { encryptField, decryptField } from '../patient/profile.ts';
 import { keyProvider } from '../crypto/keyProvider.ts';
 
-export type AccountRole = 'PATIENT' | 'PROXY' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN';
+// RECORDS_OFFICER (Phase 16): registers patients and reviews duplicates for one facility; signs in like admins.
+export type AccountRole = 'PATIENT' | 'PROXY' | 'DOCTOR' | 'FACILITY_ADMIN' | 'PLATFORM_ADMIN' | 'RECORDS_OFFICER';
 
 export interface UserAccount {
   id: string;                 // User id
   role: AccountRole;          // PATIENT: linked to a patient record; PROXY: a portal user who only acts for others
   countryCode: string;
   displayName?: string;       // admins only (clinician and patient names live on their own records)
-  facilityId?: string;        // FACILITY_ADMIN: the facility administered
+  facilityId?: string;        // FACILITY_ADMIN / RECORDS_OFFICER: their facility
   patientId?: string;         // PATIENT: the linked patient record (persisted as Patient.userId)
   phoneHash?: string;
   encryptedPhone?: string;

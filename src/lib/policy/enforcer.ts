@@ -18,6 +18,8 @@ export type PolicyAction =
   | 'CONSENT_REQUEST'
   | 'CONSENT_GRANT_OR_REVOKE'
   | 'CLINICIAN_VERIFY'
+  | 'PATIENT_REGISTER' // create a patient record (identity checks, duplicate queue)
+  | 'PATIENT_MERGE'    // merge or unmerge duplicate records, review the duplicate queue
   | 'AUDIT_LOG_READ';
 
 export interface ActorContext {
@@ -112,6 +114,14 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
     return { allowed: false, statusCode: 403, reason: 'Patient role not permitted for this action' };
   }
 
+  // 2a. RECORDS_OFFICER: registration and duplicate review for their own facility (Phase 16)
+  if (actor.role === 'RECORDS_OFFICER' && (action === 'PATIENT_REGISTER' || action === 'PATIENT_MERGE')) {
+    if (actor.facilityId && targetFacilityId === actor.facilityId) {
+      return { allowed: true, statusCode: 200, reason: 'Records officer acting for their own facility' };
+    }
+    return { allowed: false, statusCode: 403, reason: 'Records officers act only for records of their own facility' };
+  }
+
   // 2b. NURSE / RECORDS_OFFICER: drafts only, under the same consent rules as a doctor's write
   if (actor.role === 'NURSE' || actor.role === 'RECORDS_OFFICER') {
     if (action !== 'PATIENT_DRAFT_RECORD') {
@@ -123,7 +133,7 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
 
   // 3. PLATFORM_ADMIN role authorizations
   if (actor.role === 'PLATFORM_ADMIN') {
-    if (action === 'CLINICIAN_VERIFY' || action === 'AUDIT_LOG_READ') {
+    if (action === 'CLINICIAN_VERIFY' || action === 'AUDIT_LOG_READ' || action === 'PATIENT_REGISTER' || action === 'PATIENT_MERGE') {
       return { allowed: true, statusCode: 200, reason: 'Platform admin governance privileges' };
     }
     // Platform admins CANNOT view patient clinical records arbitrarily
@@ -135,6 +145,10 @@ export function evaluatePolicy(request: PolicyEvaluationRequest): PolicyDecision
 
   // 4. FACILITY_ADMIN role authorizations
   if (actor.role === 'FACILITY_ADMIN') {
+    if (action === 'PATIENT_REGISTER') {
+      if (actor.facilityId && targetFacilityId === actor.facilityId) return { allowed: true, statusCode: 200, reason: 'Facility admin registering a patient at their facility' };
+      return { allowed: false, statusCode: 403, reason: 'Facility admins register patients only at their own facility' };
+    }
     if (action === 'CLINICIAN_VERIFY') {
       if (actor.facilityId && targetFacilityId === actor.facilityId) {
         return { allowed: true, statusCode: 200, reason: 'Facility admin reviewing a clinician who claims their facility' };

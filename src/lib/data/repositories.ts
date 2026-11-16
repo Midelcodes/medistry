@@ -31,6 +31,8 @@ import type { NotificationDelivery, NotificationDeliveryRepo } from '../notifica
 import type { FacilityApiClient, FacilityApiClientRepo } from '../integrations/apiClients.ts';
 import type { FacilityPatientLink, FacilityPatientLinkRepo } from '../integrations/fhirImport.ts';
 import type { IntakeSession, IntakeSessionRepo } from '../intake/intakeService.ts';
+import type { IdentifierRepo, PatientIdentifier } from '../identity/identityStore.ts';
+import type { DuplicateReview, PatientMerge } from '../identity/mpi.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -98,11 +100,18 @@ export interface Snapshot {
   facilityApiClients?: FacilityApiClient[];
   facilityPatientLinks?: FacilityPatientLink[];
   intakeSessions?: IntakeSession[];
+  // Phase 16
+  patientIdentifiers?: PatientIdentifier[];
+  duplicateReviews?: DuplicateReview[];
+  patientMerges?: PatientMerge[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
   ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
-  AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo {
+  AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo,
+  IdentifierRepo {
+  saveDuplicateReview(r: DuplicateReview): void;
+  savePatientMerge(m: PatientMerge): void;
   readonly mode: StorageMode;
   /** The stored working set, or null for memory storage. */
   loadSnapshot(): Promise<Snapshot | null>;
