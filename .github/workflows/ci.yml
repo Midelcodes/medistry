@@ -25,6 +25,10 @@ jobs:
       - name: Test (root)
         run: npm test
 
+      # The compliance and clinical-safety documents may only name files and endpoints that exist.
+      - name: Check document references
+        run: node scripts/check-doc-paths.mjs
+
       - name: Install (mcp)
         working-directory: mcp
         run: npm ci || npm install

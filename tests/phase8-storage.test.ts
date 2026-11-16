@@ -24,6 +24,7 @@ function recordingPersistence() {
     delivery: new Map<string, any>(), apiClient: new Map<string, any>(), link: new Map<string, any>(), intake: new Map<string, any>(),
     identifier: new Map<string, any>(), review: new Map<string, any>(), merge: new Map<string, any>(), outbox: new Map<string, any>(),
     application: new Map<string, any>(), invite: new Map<string, any>(), subscription: new Map<string, any>(),
+    anomaly: new Map<string, any>(),
   };
   let refusedAudit = 0;
   const p: Persistence & { tables: typeof t; refusedAudit: () => number } = {
@@ -58,6 +59,7 @@ function recordingPersistence() {
     saveFacilityApplication: (x) => t.application.set(x.facilityId, M.applicationToRow(x)),
     saveStaffInvite: (i) => t.invite.set(i.id, M.inviteToRow(i)),
     saveSubscription: (x) => t.subscription.set(x.id, M.subscriptionToRow(x)),
+    saveAnomalyFlag: (f) => t.anomaly.set(f.id, M.anomalyFlagToRow(f)),
     appendAudit: (e) => {
       // Same continuity rule as the Prisma repository's locked append.
       const last = t.audit.at(-1);
@@ -84,6 +86,7 @@ function recordingPersistence() {
         patientMerges: [...t.merge.values()].map(M.rowToMerge), outboxMessages: [...t.outbox.values()].map(M.rowToOutbox),
         facilityApplications: [...t.application.values()].map(M.rowToApplication), staffInvites: [...t.invite.values()].map(M.rowToInvite),
         subscriptions: [...t.subscription.values()].map(M.rowToSubscription),
+        anomalyFlags: [...t.anomaly.values()].map(M.rowToAnomalyFlag),
       };
     },
     flush: async () => {}, close: async () => {},
@@ -166,6 +169,10 @@ async function doEverything(rt: Runtime) {
     accreditationDocument: { filename: 'accreditation.pdf', mimeType: 'application/pdf', contentBase64: Buffer.from('%PDF-1.4 Synthetic accreditation bytes').toString('base64') },
   }, info);
   const verified = await rt.onboarding.review(platform, applied.facilityId, 'verify', undefined, 'https://medistry.test', info);
+  // Phase 19: the audit agent, run two days later, flags the emergency accesses above that had no encounter; one is reviewed.
+  const flags = rt.anomalyAgent.run(Date.now() + 48 * 3_600_000);
+  assert.ok(flags.length > 0);
+  rt.anomalyAgent.review(platform, flags[0].id, 'dismiss', 'Synthetic anomaly review note', info);
   return { patient, card, grant, bg, ev, flag, ticket, account, proxy, registered, intake, first, dup, merge, verified };
 }
 
@@ -228,6 +235,7 @@ describe('Write-through and restart (recording repository, same rows as Postgres
     assert.strictEqual(b.mpi.getMerge(did.merge.id)!.status, 'ACTIVE');
     same(b.nationalExchange.all(), a.nationalExchange.all(), 'outbox messages');
     same(b.billing.get(did.verified.facilityId), a.billing.get(did.verified.facilityId), 'subscription');
+    same(b.anomalyAgent.list(b.accounts.get('admin-platform-demo')!, 'ALL'), a.anomalyAgent.list(a.accounts.get('admin-platform-demo')!, 'ALL'), 'anomaly flags');
     assert.ok(b.onboarding.facility(did.verified.facilityId) && b.onboarding.isVerified(did.verified.facilityId), 'verified facility');
     same(b.onboarding.listApplications(b.accounts.get('admin-platform-demo')!, 'VERIFIED'), a.onboarding.listApplications(a.accounts.get('admin-platform-demo')!, 'VERIFIED'), 'facility application');
     assert.strictEqual(b.accounts.get(did.verified.adminAccountId)?.role, 'FACILITY_ADMIN', 'invited admin');
@@ -260,7 +268,7 @@ describe('Write-through and restart (recording repository, same rows as Postgres
       'Synthetic flag note', 'Synthetic dispute reason', 'One-time code',
       '+2348000000101', '+2348000000102', '+2348000000103', 'registrant@example.org', 'synthetic-password-1', 'Synthetic licence bytes', 'licence.pdf',
       'SYN-MRN-0001', 'Synthetic imported condition', 'Synthetic intake diagnosis', '90000000001', 'Adaeze', 'Nwosu', 'Synthetic shared condition',
-      'storage-admin@example.org', '+2348000000181', 'Synthetic accreditation bytes'];
+      'storage-admin@example.org', '+2348000000181', 'Synthetic accreditation bytes', 'Synthetic anomaly review note'];
     for (const b of banned) assert.ok(!plain.includes(b), `stored rows must not contain ${String(b).slice(0, 30)}`);
   });
 

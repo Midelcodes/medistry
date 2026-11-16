@@ -590,6 +590,17 @@ export class ClinicalDataStore {
     return { recordsAdded, aiDraftsSigned };
   }
 
+  /**
+   * Whether an Encounter (draft or final) was recorded for the patient at the facility between two times. Used by the
+   * audit anomaly rule "emergency access with no subsequent encounter" (Phase 19). Metadata only.
+   */
+  hasEncounterBetween(patientId: string, facilityId: string, fromIso: string, toIso: string): boolean {
+    for (const r of this.records.values()) {
+      if (r.resourceType === 'Encounter' && r.patientId === patientId && r.originFacilityId === facilityId && r.createdAt >= fromIso && r.createdAt <= toIso) return true;
+    }
+    return false;
+  }
+
   /** Lab results ordered by a clinician (latest versions), newest first. */
   resultsOrderedBy(clinicianId: string): StoredClinicalRecord[] {
     return [...this.records.values()].filter((r) => r.isLatest && r.status === 'final' && r.orderingClinicianId === clinicianId)
@@ -611,7 +622,7 @@ export class ClinicalDataStore {
    * 3. Hard-delete safeguard: Clinical records can NEVER be hard-deleted.
    */
   deleteRecord(): never {
-    throw new Error('ERR_HARD_DELETE_PROHIBITED: Clinical records are immutable and cannot be hard-deleted under HL7 FHIR and NDPA regulations');
+    throw new Error('ERR_HARD_DELETE_PROHIBITED: Clinical records are immutable and cannot be hard-deleted (corrections are new versions)');
   }
 
   /**

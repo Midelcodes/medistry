@@ -372,6 +372,12 @@ export class EmergencyBreakGlassEngine {
     return [...this.grants.values()].filter((g) => g.facilityId === facilityId && g.grantedAt >= sinceIso).map((g) => ({ id: g.id, grantedAt: g.grantedAt }));
   }
 
+  /** Break-glass grants opened since a time (audit anomaly rules, Phase 19). Metadata only, no record content. */
+  grantsSince(sinceIso: string): Array<{ id: string; clinicianId: string; patientId: string; facilityId: string; grantedAt: string }> {
+    return [...this.grants.values()].filter((g) => g.grantedAt >= sinceIso)
+      .map((g) => ({ id: g.id, clinicianId: g.clinicianId, patientId: g.patientId, facilityId: g.facilityId, grantedAt: g.grantedAt }));
+  }
+
   /** Records that a clinician opened the emergency summary (access log; also gives the time from scan to summary). */
   recordSummaryView(grantId: string, actorUserId: string, facilityId?: string): void {
     const grant = this.grants.get(grantId);

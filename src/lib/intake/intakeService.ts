@@ -240,6 +240,11 @@ export class IntakeService {
     };
   }
 
+  /** Session metadata for the retention report (no content, no files). */
+  retentionView(): Array<{ id: string; status: string; updatedAt: string; hasFile: boolean }> {
+    return [...this.sessions.values()].map((s) => ({ id: s.id, status: s.status, updatedAt: s.updatedAt, hasFile: !!s.fileSha256 }));
+  }
+
   get(id: string, actor: ActorContext) {
     return this.review(this.session(id, actor));
   }

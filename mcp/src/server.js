@@ -12,12 +12,13 @@ import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_S
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
 import { emergencySummary } from "./medistry-client.js";
 import { verifyOfflineCard } from "./offline-card.js";
+import { startupBanner, withValidationBanner } from "./validation.js";
 
 const obs = {
   mobility: z.enum(["walking", "with_help", "immobile"]),
-  respiratoryRate: z.number().min(0).max(80).describe("breaths/min"),
-  heartRate: z.number().min(0).max(300).describe("beats/min"),
-  systolicBP: z.number().min(0).max(300).describe("mmHg"),
+  respiratoryRate: z.number().int().min(0).max(80).describe("breaths/min (whole number)"),
+  heartRate: z.number().int().min(0).max(300).describe("beats/min (whole number)"),
+  systolicBP: z.number().int().min(0).max(300).describe("mmHg (whole number)"),
   temperatureC: z.number().min(25).max(45),
   avpu: z.enum(["alert", "voice", "pain", "unresponsive"]),
   trauma: z.boolean().default(false),
@@ -38,13 +39,13 @@ server.registerTool("score_triage_priority", {
   title: "Score triage priority (SATS TEWS)",
   description: "Scores an adult patient (age >= 12) with the South African Triage Scale TEWS plus clinical discriminators. Returns colour category, target time to clinician, score breakdown and reasons. Decision support only.",
   inputSchema: { age: z.number().int().min(12).max(120), ...obs, signs },
-}, async ({ age, signs: s, ...o }) => ok({ age, ...triage({ ...o, signs: s }) }));
+}, async ({ age, signs: s, ...o }) => ok(withValidationBanner({ age, ...triage({ ...o, signs: s }) })));
 
 server.registerTool("flag_deterioration", {
   title: "Flag clinical deterioration",
   description: "Takes 2-12 observation sets ordered oldest to newest and flags worsening TEWS trend, sudden jumps, threshold crossings or drops in consciousness.",
   inputSchema: { observations: z.array(obsSchema).min(2).max(12) },
-}, async ({ observations }) => ok(detectDeterioration(observations)));
+}, async ({ observations }) => ok(withValidationBanner(detectDeterioration(observations))));
 
 server.registerTool("queue_add_patient", {
   title: "Add triaged patient to a facility queue",
@@ -145,4 +146,7 @@ server.registerTool("verify_offline_card", {
   catch (e) { return err(e.message); }
 });
 
+// Stdout carries the MCP protocol, so the start-up banner goes to stderr.
+const banner = startupBanner();
+if (banner) console.error(banner);
 await server.connect(new StdioServerTransport());

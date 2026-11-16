@@ -277,6 +277,11 @@ export class OfflineScanService {
     return version < latest ? 'superseded' : 'current';
   }
 
+  /** All uploaded scan events (copies), for audit anomaly rules and the retention report. */
+  allEvents(): OfflineScanEventRecord[] {
+    return [...this.events.values()].map((e) => ({ ...e }));
+  }
+
   getEvent(eventId: string): OfflineScanEventRecord | undefined {
     const ev = this.events.get(eventId);
     return ev ? { ...ev } : undefined;

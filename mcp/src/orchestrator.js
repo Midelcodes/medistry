@@ -13,6 +13,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { extractCardToken } from "./offline-card.js";
+import { reportBannerLines } from "./validation.js";
 
 const BASE = (process.env.MEDISTRY_URL || "http://localhost:3000").replace(/\/$/, "");
 
@@ -87,7 +88,7 @@ export async function runScenario({ input, triageMcp, fsMcp, outDir }) {
   }
 
   async function handoverNode({ summary, triage, referral }) {
-    const L = ["# Emergency handover (SYNTHETIC DEMO DATA)", ""];
+    const L = ["# Emergency handover (SYNTHETIC DEMO DATA)", "", ...reportBannerLines()];
     if (summary.source === "card") {
       if (summary.verified) {
         L.push(`Source: offline Medistry card v${summary.cardVersion}, signature verified`);

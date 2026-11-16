@@ -149,6 +149,14 @@ export class FacilityOnboardingService {
     return { facilityId, status: 'PENDING', message: 'Thank you. A Medistry platform admin will verify the facility; the admin contact then receives an invitation.' };
   }
 
+  /** Invitation and application metadata for the retention report (no contact details, no documents). */
+  retentionView() {
+    return {
+      invites: [...this.invites.values()].map((i) => ({ id: i.id, expiresAt: i.expiresAt, usedAt: i.usedAt })),
+      applications: [...this.applications.values()].map((a) => ({ id: a.facilityId, status: a.status, reviewedAt: a.reviewedAt })),
+    };
+  }
+
   listApplications(admin: UserAccount, status = 'PENDING') {
     if (admin.role !== 'PLATFORM_ADMIN') throw new AuthError(403, 'Platform admins only');
     return [...this.applications.values()].filter((a) => a.status === status).map((a) => {

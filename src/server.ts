@@ -63,7 +63,7 @@ log('info', 'startup', {
 const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
   consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
   accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility,
-  billing, onboarding } = runtime;
+  billing, onboarding, anomalyAgent } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
@@ -102,6 +102,7 @@ const handlePortalApi = createPortalApi({
   addFacility,
   billing,
   onboarding,
+  anomalyAgent,
 });
 
 // Outbox worker: sends due national-exchange messages (retries with backoff, then dead-letters).
@@ -109,6 +110,17 @@ const OUTBOX_POLL_MS = Math.max(5, parseInt(process.env.OUTBOX_POLL_SECONDS || '
 setInterval(() => {
   nationalExchange.processDue().catch((err) => log('error', 'outbox_worker_failed', { error: String(err?.message || err) }));
 }, OUTBOX_POLL_MS).unref();
+
+// Audit agent: rule-based anomaly flags for platform-admin review (no automatic action). Runs at start-up too.
+const ANOMALY_SCAN_MS = Math.max(5, parseInt(process.env.ANOMALY_SCAN_MINUTES || '60', 10) || 60) * 60_000;
+const scanForAnomalies = () => {
+  try {
+    const created = anomalyAgent.run();
+    if (created.length) log('info', 'anomaly_flags_created', { count: created.length });
+  } catch (err: any) { log('error', 'anomaly_scan_failed', { error: String(err?.message || err) }); }
+};
+scanForAnomalies();
+setInterval(scanForAnomalies, ANOMALY_SCAN_MS).unref();
 
 // Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th
 // birthday (also enforced on every request). Runs once at start-up.

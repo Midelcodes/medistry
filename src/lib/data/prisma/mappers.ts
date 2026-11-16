@@ -31,6 +31,7 @@ import type { DuplicateReview, PatientMerge } from '../../identity/mpi.ts';
 import type { OutboxMessage } from '../../integrations/hie/nationalExchange.ts';
 import type { FacilityApplication, StaffInvite } from '../../facilities/onboarding.ts';
 import type { Subscription } from '../../billing/billingService.ts';
+import type { AnomalyFlag } from '../../audit/anomalyAgent.ts';
 
 type Row = Record<string, any>;
 
@@ -116,6 +117,15 @@ export const rowToInvite = (r: Row): StaffInvite => clean({
 export const subscriptionToRow = (s: Subscription): Row => ({
   ...s, providerRef: s.providerRef ?? null, lastEventId: s.lastEventId ?? null, currentPeriodEnd: new Date(s.currentPeriodEnd), createdAt: new Date(s.createdAt), updatedAt: new Date(s.updatedAt),
 });
+export const anomalyFlagToRow = (f: AnomalyFlag): Row => ({
+  ...f, windowStart: new Date(f.windowStart), windowEnd: new Date(f.windowEnd), createdAt: new Date(f.createdAt),
+  reviewedBy: f.reviewedBy ?? null, reviewedAt: date(f.reviewedAt), encryptedReviewNote: f.encryptedReviewNote ?? null,
+});
+export const rowToAnomalyFlag = (r: Row): AnomalyFlag => clean({
+  id: r.id, rule: r.rule, dedupeKey: r.dedupeKey, clinicianId: r.clinicianId, facilityId: r.facilityId, eventRefs: [...r.eventRefs],
+  windowStart: iso(r.windowStart)!, windowEnd: iso(r.windowEnd)!, explanation: r.explanation, status: r.status, createdAt: iso(r.createdAt)!,
+  reviewedBy: r.reviewedBy ?? undefined, reviewedAt: iso(r.reviewedAt) ?? undefined, encryptedReviewNote: r.encryptedReviewNote ?? undefined,
+} as AnomalyFlag);
 export const rowToSubscription = (r: Row): Subscription => clean({
   id: r.id, facilityId: r.facilityId, plan: r.plan, status: r.status, currentPeriodEnd: iso(r.currentPeriodEnd)!, provider: r.provider,
   providerRef: r.providerRef ?? undefined, lastEventId: r.lastEventId ?? undefined, createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,

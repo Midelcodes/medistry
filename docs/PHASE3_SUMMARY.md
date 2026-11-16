@@ -48,7 +48,7 @@
 ## 4. Risks & Decisions for Phase 4 (Clinical Data Model & Transfer)
 
 ### Risks to Track
-1. **FHIR Versioning Immobility**: In compliance with clinical audit standards, medical records must **never be overwritten or hard-deleted**. Any update to a condition or prescription creates a new version (`versionId: n + 1, isLatest: true`), deprecating the previous version (`isLatest: false`).
+1. **FHIR Versioning Immobility**: Following clinical audit practice, medical records must **never be overwritten or hard-deleted**. Any update to a condition or prescription creates a new version (`versionId: n + 1, isLatest: true`), deprecating the previous version (`isLatest: false`).
 2. **Encrypted Attachment Storage**: Scanned lab reports and referral documents must undergo size limitations (max 10MB) and virus scanning before being encrypted with AES-256-GCM.
 
 ### Decisions Needed from User Before Phase 4

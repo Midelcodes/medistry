@@ -10,6 +10,7 @@
 // strips names, contacts, ids and free-text notes, but minimisation alone is not a lawful basis.
 // Production should use an in-country or self-hosted model behind the same generate() interface.
 import { createMinimiser } from "./minimise.js";
+import { validationBanner } from "./validation.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -152,6 +153,8 @@ async function main() {
     // Local legend only: what the placeholders the model saw stand for (card tokens are not printed).
     const legend = [...minimiser.placeholders()].filter(([p]) => !p.startsWith("[CARD_")).map(([p, v]) => `${p} = ${v}`);
     if (legend.length) console.log(`\nPlaceholders (local only, never sent to the model): ${legend.join(", ")}`);
+    const banner = validationBanner();
+    if (banner) console.log(`\n${banner}.`);
     console.log("\nDecision support only, synthetic data. A clinician must validate every output.");
     if (out.stoppedReason !== "final") process.exitCode = 2;
   } finally {

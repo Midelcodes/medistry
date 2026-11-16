@@ -31,6 +31,7 @@ import { BillingService } from './billing/billingService.ts';
 import { BillingNotConfigured, loadPlans, type BillingProvider } from './billing/BillingProvider.ts';
 import { PaystackProvider } from './billing/PaystackProvider.ts';
 import { MpesaDarajaProvider } from './billing/MpesaDarajaProvider.ts';
+import { AuditAnomalyAgent } from './audit/anomalyAgent.ts';
 import { FacilityOnboardingService } from './facilities/onboarding.ts';
 import { EmergencyBreakGlassEngine } from './emergency/breakGlassEngine.ts';
 import { OfflineCardStore } from './emergency/offlineCardStore.ts';
@@ -74,6 +75,7 @@ export interface Runtime {
   billingProviders: Map<string, BillingProvider>;
   billing: BillingService;
   onboarding: FacilityOnboardingService;
+  anomalyAgent: AuditAnomalyAgent;
   emergencyEngine: EmergencyBreakGlassEngine;
   offlineCardStore: OfflineCardStore;
   consentManager: ConsentLifecycleManager;
@@ -213,11 +215,13 @@ function buildEngines(seedData: SeedDatabasePayload, auditEntries: Snapshot['aud
   const billingProviders = createBillingProviders(plans.paystackPlanCodes);
   const billing = new BillingService({ auditManager, facilities: seedData.facilities, providers: () => billingProviders, demoMode: DEMO_MODE }, plans);
   const onboarding = new FacilityOnboardingService({ facilities: seedData.facilities, clinicians: seedData.clinicians, addFacility, accounts, patientAuth, dispatcher, auditManager, billing });
+  // Audit agent (Phase 19): rule-based anomaly flags for human review; never acts on its own.
+  const anomalyAgent = new AuditAnomalyAgent({ auditManager, emergencyEngine, offlineScans, clinicalStore, clinicians: seedData.clinicians, facilities: seedData.facilities, patientsById });
   return {
     seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine, consoleProvider,
     dispatcher, deliveries, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
     accounts, patientAuth, staff, proxies, ussd, apiClients, patientLinks, fhirImport, intake, identity, mpi, registration,
-    connectors, nationalExchange, pharmacy, addFacility, billingProviders, billing, onboarding,
+    connectors, nationalExchange, pharmacy, addFacility, billingProviders, billing, onboarding, anomalyAgent,
   };
 }
 
@@ -242,6 +246,7 @@ function attach(rt: Omit<Runtime, 'persistence'>, persistence: Persistence): Run
   rt.nationalExchange.persistence = persistence;
   rt.billing.persistence = persistence;
   rt.onboarding.persistence = persistence;
+  rt.anomalyAgent.persistence = persistence;
   connectAuth(rt, persistence);
   rt.staff.ensureDemoAdmins((f) => !rt.onboarding.hasApplication(f.id)); // never for self-registered facilities
   rt.staff.bootstrapPlatformAdmin();
@@ -321,6 +326,7 @@ function hydrate(snapshot: Snapshot, persistence: Persistence): Runtime {
   rt.nationalExchange.hydrate(snapshot.outboxMessages || []);
   rt.billing.hydrate(snapshot.subscriptions || []);
   rt.onboarding.hydrate(snapshot.facilityApplications || [], snapshot.staffInvites || []);
+  rt.anomalyAgent.hydrate(snapshot.anomalyFlags || []);
   rt.accounts.hydrate(snapshot.userAccounts || []);
   for (const patient of snapshot.patients) {
     const account = rt.accounts.get(patient.userId);

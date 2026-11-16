@@ -37,6 +37,7 @@ export function createMemoryPersistence(): Persistence {
     saveFacilityApplication: noop,
     saveStaffInvite: noop,
     saveSubscription: noop,
+    saveAnomalyFlag: noop,
     loadSnapshot: async () => null,
     flush: async () => {},
     close: async () => {},

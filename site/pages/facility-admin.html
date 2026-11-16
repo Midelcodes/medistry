@@ -52,7 +52,7 @@
               <input id="fa-login-totp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
             </div>
             <div class="demo-hint">
-              <span>Demo: try <code>admin-fac-luth-001-demo</code>.</span>
+              <span>Demo: try <code>admin-fac-luth-001-demo</code> (facility) or <code>admin-platform-demo</code> (reviews).</span>
               <button type="button" class="btn-text-link" id="fa-demo-code">Show the current demo code</button>
             </div>
             <p class="form-error" id="fa-login-error" role="alert" hidden></p>
@@ -97,6 +97,7 @@
             <button class="tab" role="tab" data-tab="integrations" aria-selected="false">Integrations</button>
             <button class="tab" role="tab" data-tab="usage" aria-selected="false">Usage</button>
             <button class="tab" role="tab" data-tab="billing" aria-selected="false">Billing</button>
+            <button class="tab" role="tab" data-tab="review" aria-selected="false" hidden>Review</button>
           </div>
 
           <div class="tab-panel" id="fa-tab-staff" role="tabpanel">
@@ -137,6 +138,18 @@
 
           <div class="tab-panel" id="fa-tab-billing" role="tabpanel" hidden>
             <div id="fa-billing"></div>
+          </div>
+
+          <!-- Platform admins only -->
+          <div class="tab-panel" id="fa-tab-review" role="tabpanel" hidden>
+            <h2 class="panel-title">Audit agent flags</h2>
+            <p class="panel-note">Rule-based prompts for review, not findings of wrongdoing. Nothing happens to a clinician automatically: you record a decision and a note.</p>
+            <button type="button" class="btn btn-secondary-pill btn-small" id="rv-run"><span>Run the rules now</span></button>
+            <div id="rv-flags" class="card-list"></div>
+            <h2 class="panel-title">Patient disputes</h2>
+            <div id="rv-disputes" class="card-list"></div>
+            <h2 class="panel-title">Facility applications</h2>
+            <div id="rv-applications" class="card-list"></div>
           </div>
         </div>
       </div>

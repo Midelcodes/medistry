@@ -40,7 +40,7 @@
     - **Payload Size**: ~10.4 KB (well under 50 KB ceiling).
     - **Server p95 Latency**: 0.05 ms (sub-millisecond execution, well under 5 ms).
     - **Throughput**: > 10,000 requests/second.
-    - Guaranteed compliance with sub-1.5s p95 target over throttled 3G mobile connections.
+    - Designed for the sub-1.5s p95 target over throttled 3G mobile connections.
 - **Comprehensive Documentation**:
   - [`docs/THREAT_MODEL.md`](file:///home/midel/medical/docs/THREAT_MODEL.md): Complete analysis of threat actors, attack vectors, and implemented cryptographic mitigations.
   - [`README.md`](file:///home/midel/medical/README.md): Full-stack platform overview, Docker Compose quickstart, directory architecture, and testing guide.

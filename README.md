@@ -147,6 +147,29 @@ All of this is active when `DEMO_MODE=0`. In demo mode the synthetic patient pic
   MedicationDispense, only under the patient's consent: a one-time code sent to the patient, or a scan of the
   patient's current card while online. They can never edit a prescription or read other records.
 
+## Compliance documents and safety controls
+
+Medistry is *designed to support* data-protection and clinical-safety duties; **it makes no claim of legal
+compliance**. Working documents, pre-filled from the code (every path and endpoint they name is checked by
+`node scripts/check-doc-paths.mjs`, also run in CI):
+
+- [docs/compliance/](docs/compliance/): DPIA templates for Nigeria and Kenya (with data-flow diagrams), records of
+  processing, data subject rights with the endpoints, breach response, and the regulator action checklist.
+  Legal conclusions are marked "TO BE CONFIRMED BY COUNSEL".
+- [docs/clinical/](docs/clinical/): the clinical safety case (hazard log H1 to H7 with controls, tests and residual
+  risk, sign-off left blank for a named clinical safety officer) and the TEWS validation checklist.
+- **Retention (report only).** `RETENTION_*` settings (no defaults: periods are a legal decision) drive
+  `scripts/retention-report.ts` and `GET /api/admin/retention-report`, which list what each rule *would* archive.
+  Nothing is deleted; clinical records are never hard-deleted.
+- **Audit agent.** Rule-based, explainable flags for platform-admin review (`src/lib/audit/anomalyAgent.ts`): more
+  than N emergency accesses in a shift, no encounter after an emergency access, access outside the clinician's
+  facility country, the same patient scanned repeatedly. Thresholds `ANOMALY_*` are placeholders. No automatic
+  action: a human records a decision (`/facility-admin`, Review tab, or `GET /api/admin/anomalies`).
+- **Triage banner.** "Triage scoring not clinically validated" is shown by the MCP triage tools until
+  `CLINICAL_VALIDATION_SIGNED=1`.
+- **Patient rights endpoints.** FHIR export `GET /api/patients/:id/export`; disputes are reviewed by platform admins
+  (`GET /api/admin/disputes`, `POST /api/admin/disputes/:ticketId/resolve`).
+
 ## Facilities: onboarding, staff, usage and billing
 
 - **Self-onboarding.** A facility applies at `/facility-admin` (`POST /api/facilities/register`: name, type,
@@ -363,7 +386,7 @@ medical/
 
 ---
 
-## 🔒 Security & Privacy Guarantees
+## 🔒 Security & Privacy Controls
 
 - **No Plaintext PHI**: All patient demographics and clinical observation payloads are encrypted via AES-256-GCM before storage.
 - **Append-Only Immutability**: Clinical records are versioned (`versionId = n + 1`); attempting to hard-delete clinical data throws `ERR_HARD_DELETE_PROHIBITED`.
@@ -375,4 +398,4 @@ medical/
 
 ## 📄 License & Regulatory Notice
 
-This project is licensed under the MIT License. Clinical data mappings follow HL7 FHIR R4 standards. Compliance implementations map to the **Nigeria Data Protection Act (NDPA) 2023** and **Medical and Dental Council of Nigeria (MDCN)** guidelines. Formal legal review by qualified healthcare counsel is required before production clinical deployment.
+This project is licensed under the MIT License. Clinical data mappings follow HL7 FHIR R4 standards. Medistry is *designed to support* the **Nigeria Data Protection Act (NDPA) 2023**, Kenya's **Data Protection Act, 2019** and the clinician regulators' rules; **no claim of legal compliance is made**. The DPIA templates, records of processing, rights, breach and regulator checklists are in [docs/compliance/](docs/compliance/), and the clinical safety case in [docs/clinical/](docs/clinical/). Formal legal and clinical review is required before any real deployment.

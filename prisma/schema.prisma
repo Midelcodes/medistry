@@ -721,6 +721,27 @@ model Subscription {
   updatedAt        DateTime
 }
 
+// Audit agent flags (Phase 19): rule-based findings for human review. No names or patient identifiers in the
+// explanation; the reviewer's note is encrypted. Nothing happens to a clinician automatically.
+model AnomalyFlag {
+  id                  String    @id
+  rule                String    // BREAK_GLASS_PER_SHIFT | SCAN_WITHOUT_ENCOUNTER | SCAN_OUTSIDE_COUNTRY | REPEATED_PATIENT_SCANS
+  dedupeKey           String    @unique
+  clinicianId         String
+  facilityId          String
+  eventRefs           String[]
+  windowStart         DateTime
+  windowEnd           DateTime
+  explanation         String
+  status              String    // OPEN | DISMISSED | CONFIRMED
+  createdAt           DateTime
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  encryptedReviewNote String?
+
+  @@index([status, createdAt])
+}
+
 // Outbound sync to a national health information exchange (Phase 17). Ids only: the record is read at send time.
 model OutboxMessage {
   id            String    @id

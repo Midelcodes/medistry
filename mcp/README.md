@@ -6,6 +6,11 @@ audited emergency break-glass record to SATS/TEWS triage, queue management and i
 > Decision support only. A clinician makes every clinical decision. All data is **synthetic**.
 > The TEWS bands and discriminators were written from the published SATS design and must be validated
 > against the official SATS manual by a clinician before any real use.
+> Until then the server logs **"Triage scoring not clinically validated"** at start-up, and every
+> `score_triage_priority` / `flag_deterioration` result and handover report carries it. Set
+> `CLINICAL_VALIDATION_SIGNED=1` only after `docs/clinical/TEWS_VALIDATION_CHECKLIST.md` and
+> `docs/clinical/CLINICAL_SAFETY_CASE.md` are signed (`src/validation.js`). Rates and blood pressure must be whole
+> numbers; a value outside every band is refused rather than scored.
 
 ## What it does
 

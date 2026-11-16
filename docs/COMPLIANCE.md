@@ -7,7 +7,7 @@
 
 ## 1. Statutory Context & Principles
 
-MEDISTRY operates as a Data Controller and Processor under the provisions of the **Nigeria Data Protection Act (NDPA) 2023**, regulated by the **Nigeria Data Protection Commission (NDPC)**. Health and genetic data are classified as **Sensitive Personal Data** under Section 30 of the Act, demanding heightened technical and organizational safeguards.
+MEDISTRY is *designed to support* the **Nigeria Data Protection Act (NDPA) 2023**, regulated by the **Nigeria Data Protection Commission (NDPC)**; whether it acts as controller or processor for each activity is TO BE CONFIRMED BY COUNSEL. No claim of legal compliance is made. The working documents are in [docs/compliance/](compliance/) (DPIA templates for NG and KE, records of processing, data subject rights, breach response, regulator actions). Health and genetic data are classified as **Sensitive Personal Data** under Section 30 of the Act, demanding heightened technical and organizational safeguards.
 
 ---
 
@@ -20,7 +20,7 @@ MEDISTRY operates as a Data Controller and Processor under the provisions of the
 | **Section 24(1)(c)** | Data Minimization | Emergency QR cards and NFC payloads contain zero clinical data—only an opaque, unguessable URL (`/e/<code>`). No personal data is exposed to anonymous scanners. |
 | **Section 30(1)** | Processing of Sensitive Personal Data (Health & Genotypes) | Multi-layered field-level encryption (AES-256-GCM) with key rotation. Clinical observations and diagnoses are stored in encrypted FHIR R4 containers. |
 | **Section 34** | Rights of the Data Subject (Right to be Informed & Access) | Immutable, patient-facing **"Who accessed my record"** audit trail. Patients receive instant alerts (SMS/push) upon any emergency break-glass event with dispute escalation. |
-| **Section 34(1)(d)** | Right to Data Portability | Standards-compliant FHIR R4 JSON export bundle and human-readable patient health summary PDF download. |
+| **Section 34(1)(d)** | Right to Data Portability | FHIR R4 JSON export bundle (`GET /api/patients/:id/export`); a human-readable summary exists in code without an endpoint. |
 | **Section 39** | Security of Processing & Technical Safeguards | Argon2id/scrypt memory-hard password hashing, mandatory RFC 6238 TOTP MFA for clinicians, 15-minute clinician session timeouts, and SHA-256 hash-chained audit trails. |
 | **Section 41 & 42** | Cross-Border Data Transfer Restrictions | Single-region in-country data residency (`DEPLOYMENT_COUNTRY=NG`). All primary databases, logs, and cryptographic keys reside in the authorized regional zone. |
 
@@ -38,7 +38,7 @@ MEDISTRY operates as a Data Controller and Processor under the provisions of the
 
 ## 3. Clinician Licensing & Regulatory Oversight (MDCN)
 
-In compliance with the **Medical and Dental Practitioners Act (Cap M8, LFN 2004)**:
+Designed to support the **Medical and Dental Practitioners Act (Cap M8, LFN 2004)** (not legally reviewed):
 1. **Practitioner Folio Validation**: Clinicians must submit valid Folio credentials (`MDCN/R/XXXXX`, `MDCN/P/XXXXX`, `MDCN/F/XXXXX`).
 2. **Multi-Tenant Facility Affiliation**: Clinicians must be tied to verified healthcare facilities with verifiable operating permits.
 3. **Pluggable MDCN Registry**: Onboarding is governed by the `IMdcnRegistryAdapter` interface, enabling immediate manual registrar vetting and future automated live lookup against the MDCN electronic register.
@@ -98,6 +98,8 @@ Status: design and engineering only. **Compliance has not been assessed or achie
 ## 7. TODO Before Any Real Deployment
 
 These are open. None of them has been done.
+
+The owner-by-owner checklist is [compliance/REGULATOR_ACTIONS.md](compliance/REGULATOR_ACTIONS.md) (Phase 19); this list is kept for history.
 
 - [ ] Register with the **Nigeria Data Protection Commission (NDPC)** as required for the controller or processor
       role Medistry takes in Nigeria.

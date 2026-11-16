@@ -102,8 +102,8 @@
 
   // ---- App ----
   let activeTab = 'staff';
-  const loaders = { staff: loadStaff, integrations: loadIntegrations, usage: loadUsage, billing: loadBilling };
-  initTabs($('#fa-app'), 'fa-tab-', (name) => { activeTab = name; if (me) loaders[name]().catch(fail); });
+  const loaders = { staff: loadStaff, integrations: loadIntegrations, usage: loadUsage, billing: loadBilling, review: loadReview };
+  const selectTab = initTabs($('#fa-app'), 'fa-tab-', (name) => { activeTab = name; if (me) loaders[name]().catch(fail); });
 
   async function enter() {
     const r = await call('/api/admin/me');
@@ -116,8 +116,64 @@
       $('#fa-tab-staff').innerHTML = '<p class="empty-note">Your account is ready. Records officers use the records desk; this page is for facility admins.</p>';
       return;
     }
+    if (me.role === 'PLATFORM_ADMIN') {
+      // Platform admins review flags, disputes and applications; facility tabs need a facility.
+      document.querySelectorAll('#fa-app .tab').forEach((t) => { t.hidden = t.dataset.tab !== 'review'; });
+      selectTab('review');
+      return;
+    }
     await loaders[activeTab]();
   }
+
+  // ---- Review (platform admins) ----
+  const note = (what) => {
+    const text = window.prompt(`Note for this ${what} (at least 5 characters)`);
+    return text && text.trim().length >= 5 ? text.trim() : null;
+  };
+  async function loadReview() {
+    const [{ flags }, { disputes }, { applications }] = await Promise.all([
+      call('/api/admin/anomalies'), call('/api/admin/disputes?status=PENDING_REVIEW'), call('/api/admin/facility-applications'),
+    ]);
+    $('#rv-flags').innerHTML = flags.length ? flags.map((f) => `
+      <div class="list-card"><div><div class="lc-title">${esc(f.rule.replace(/_/g, ' ').toLowerCase())} <span class="badge amber">open</span></div>
+      <div class="lc-meta">${esc(f.explanation)}</div>
+      <div class="lc-meta">Clinician ${esc(f.clinicianId)} • ${esc(fmtDate(f.windowStart, true))} • events: ${f.eventRefs.map(esc).join(', ')}</div></div>
+      <div class="lc-actions"><button type="button" class="btn-text-link" data-flag="${esc(f.id)}" data-decision="confirm">Refer to governance</button>
+      <button type="button" class="btn-text-link" data-flag="${esc(f.id)}" data-decision="dismiss">Dismiss</button></div></div>`).join('') : '<p class="empty-note">No open flags.</p>';
+    $('#rv-disputes').innerHTML = disputes.length ? disputes.map((d) => `
+      <div class="list-card"><div><div class="lc-title">Dispute of ${esc(d.accessType.replace(/_/g, ' ').toLowerCase())} access</div>
+      <div class="lc-meta">${esc(d.disputeReason)}</div><div class="lc-meta">Audit entry ${esc(d.auditLogId)} • ${esc(fmtDate(d.createdAt, true))}</div></div>
+      <div class="lc-actions"><button type="button" class="btn-text-link" data-dispute="${esc(d.ticketId)}" data-resolution="RESOLVED_VALID">Access was valid</button>
+      <button type="button" class="btn-text-link" data-dispute="${esc(d.ticketId)}" data-resolution="RESOLVED_BREACH">Breach: start response</button></div></div>`).join('') : '<p class="empty-note">No disputes waiting.</p>';
+    $('#rv-applications').innerHTML = applications.length ? applications.map((a) => `
+      <div class="list-card"><div><div class="lc-title">${esc(a.name)} (${esc(a.kind.toLowerCase())}, ${esc(a.countryCode)})</div>
+      <div class="lc-meta">Registry code ${esc(a.registryCode)} • submitted ${esc(fmtDate(a.submittedAt))} • document ${esc(a.document.filename)}</div></div>
+      <div class="lc-actions"><button type="button" class="btn btn-pill-primary btn-small" data-application="${esc(a.facilityId)}" data-verdict="verify">Verify</button>
+      <button type="button" class="btn-text-link" data-application="${esc(a.facilityId)}" data-verdict="reject">Reject</button></div></div>`).join('') : '<p class="empty-note">No applications waiting.</p>';
+  }
+  $('#fa-tab-review').addEventListener('click', async (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    try {
+      if (t.id === 'rv-run') {
+        const { created } = await call('/api/admin/anomalies/run', { method: 'POST', body: {} });
+        showToast('Rules run', `${created} new flag(s).`);
+      } else if (t.dataset.flag) {
+        const text = note('decision');
+        if (!text) return;
+        await call(`/api/admin/anomalies/${encodeURIComponent(t.dataset.flag)}/review`, { method: 'POST', body: { decision: t.dataset.decision, note: text } });
+      } else if (t.dataset.dispute) {
+        const text = note('resolution');
+        if (!text) return;
+        await call(`/api/admin/disputes/${encodeURIComponent(t.dataset.dispute)}/resolve`, { method: 'POST', body: { resolution: t.dataset.resolution, notes: text } });
+      } else if (t.dataset.application) {
+        const reason = t.dataset.verdict === 'reject' ? window.prompt('Reason for rejecting') : undefined;
+        if (t.dataset.verdict === 'reject' && !reason) return;
+        await call(`/api/admin/facilities/${encodeURIComponent(t.dataset.application)}/${t.dataset.verdict}`, { method: 'POST', body: { reason } });
+      } else return;
+      await loadReview();
+    } catch (ex) { fail(ex); }
+  });
 
   const gated = (ex, el) => { if (ex.status === 402) { el.innerHTML = `<p class="empty-note">${esc(ex.message)}</p>`; return true; } return false; };
 

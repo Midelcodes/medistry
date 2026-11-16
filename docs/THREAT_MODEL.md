@@ -113,6 +113,15 @@ This document outlines the threat analysis, threat actors, attack vectors, and s
 | Forged payment webhook activates a subscription | Paystack: HMAC-SHA512 signature (`Paystack-Signature` with timestamp, 5-minute window, or legacy `x-paystack-signature`), constant-time compare; M-Pesa: secret in the callback path (Daraja callbacks are unsigned); amount checked against the plan; events applied once; every rejection audited | The M-Pesa path secret appears in Safaricom's logs; rotate it if exposed. TODO: confirm the Daraja callback format and any signing option |
 | Non-payment cuts off emergency care | Only admin and analytics routes check the subscription (402). Break-glass, offline scanning, patient records, imports, clinician approval and staff suspension never do | None known; covered by tests |
 
+## 2d. Insider misuse and safety controls (Phase 19)
+
+| Threat | Mitigation | Limit |
+|---|---|---|
+| A clinician snoops through emergency access | The audit agent flags many accesses in a shift, access with no follow-up encounter, access outside the clinician's facility country and repeated access to one patient; platform admins review every flag; the patient is notified of each access and can dispute it | Rules are heuristics with placeholder thresholds; a careful insider can stay under them. Flags are not proof, and nothing happens automatically |
+| An admin buries a flag or dispute | Every flag creation and review decision is an audit-chain entry with the reviewer's id; the note is required | Platform admins are trusted; a second reviewer is not enforced (TODO) |
+| A retention job deletes evidence | The retention job is report-only and has no delete path (checked by a test); clinical records cannot be hard-deleted | An archiving job, when built, needs its own review and a signed audit checkpoint |
+| Triage scores trusted before validation | Banner on every score until `CLINICAL_VALIDATION_SIGNED=1`; out-of-band values refused | The banner can be ignored; the flag can be set without a real sign-off (process control) |
+
 ## 3. Offline Emergency Card (Signed QR), Clinician Passes and Offline Scans
 
 Scope: the signed QR emergency card, the offline scanner at `/s`, clinician passes, device keys and

@@ -38,6 +38,9 @@ import type { PatientRegistrationService } from '../identity/registration.ts';
 import { NATIONAL_EXCHANGE_SCOPE, type NationalExchangeService } from '../integrations/hie/nationalExchange.ts';
 import type { PharmacyService } from '../integrations/pharmacy.ts';
 import type { BillingService } from '../billing/billingService.ts';
+import type { AuditAnomalyAgent } from '../audit/anomalyAgent.ts';
+import { retentionReport } from '../ops/retention.ts';
+import { RecordExportEngine } from '../clinical/export.ts';
 import type { FacilityOnboardingService } from '../facilities/onboarding.ts';
 import { facilityUsage } from '../facilities/usage.ts';
 import { getSecurityHttpHeaders, sanitizeClinicalText, SlidingWindowRateLimiter } from '../security/rateLimiter.ts';
@@ -91,6 +94,7 @@ export interface PortalContext {
   // Facilities sign up, run their staff and pay (Phase 18)
   billing: BillingService;
   onboarding: FacilityOnboardingService;
+  anomalyAgent: AuditAnomalyAgent;
 }
 
 class HttpError extends Error {
@@ -242,6 +246,7 @@ export function createPortalApi(ctx: PortalContext) {
   // A proxy acts for the patient: the actor is the patient's record, the proxy's own id rides along (and the
   // audit log records the proxy, see audit/actingContext.ts).
   const patientActor = (p: PatientEntity): ActorContext => ({ userId: p.id, role: 'PATIENT', proxyUserId: currentActing()?.proxyUserId });
+  const exportEngine = new RecordExportEngine(ctx.clinicalStore, ctx.timelineEngine);
 
   function facilityName(id: string): string {
     return ctx.seedData.facilities.find((f) => f.id === id)?.name || id;
@@ -696,6 +701,17 @@ export function createPortalApi(ctx: PortalContext) {
       } catch (err: any) {
         throw new HttpError(/not found/i.test(err.message) ? 404 : 400, err.message);
       }
+    }
+
+    // Data portability: the patient's records as a FHIR R4 Bundle (latest versions; drafts excluded). Audited.
+    if (method === 'GET' && sub === 'export') {
+      const bundle = exportEngine.exportFhirBundle(patient.id, patientActor(patient), {});
+      ctx.auditManager.appendEntry({
+        actorId: viewer?.id || patient.userId, subjectId: patient.id, action: 'PATIENT_EXPORTED_RECORD', accessType: 'NORMAL_CONSENT',
+        resourceType: 'Bundle', resourceId: bundle.id, ipAddress: clientIp(req), userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+        reason: `Patient record exported as FHIR R4 (${bundle.total} resources)`,
+      });
+      return bundle;
     }
 
     if (method === 'GET' && sub === 'timeline') {
@@ -1382,6 +1398,44 @@ export function createPortalApi(ctx: PortalContext) {
       if (!ctx.onboarding.isVerified(admin.facilityId!)) throw new HttpError(403, 'This facility is not verified yet');
       const body = await readBody(req);
       return ctx.billing.subscribe(admin, admin.facilityId!, body.plan, { email: ctx.accounts.emailOf(admin), phone: ctx.accounts.phoneOf(admin) }, appBaseUrl(req), info);
+    }
+
+    // Audit agent review queue (platform admins): rule-based flags, human decision, no automatic action.
+    if (method === 'GET' && pathname === '/api/admin/anomalies') {
+      return { flags: ctx.anomalyAgent.list(admin, url.searchParams.get('status') || 'OPEN'), rules: ctx.anomalyAgent.config };
+    }
+    if (method === 'POST' && pathname === '/api/admin/anomalies/run') {
+      if (admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Platform admins only');
+      return { created: ctx.anomalyAgent.run().length };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/anomalies\/([^/]+)\/review$/))) {
+      const body = await readBody(req);
+      return { flag: ctx.anomalyAgent.review(admin, decodeURIComponent(m[1]), body.decision, body.note, info) };
+    }
+    // Patient disputes of access events (complaints): platform admins review and resolve them.
+    if (method === 'GET' && pathname === '/api/admin/disputes') {
+      if (admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Platform admins only');
+      const status = url.searchParams.get('status');
+      return { disputes: ctx.accessLogManager.getOpenDisputes().filter((t) => !status || t.status === status) };
+    }
+    if (method === 'POST' && (m = pathname.match(/^\/api\/admin\/disputes\/([^/]+)\/resolve$/))) {
+      if (admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Platform admins only');
+      const body = await readBody(req);
+      if (body.resolution !== 'RESOLVED_VALID' && body.resolution !== 'RESOLVED_BREACH') throw new HttpError(400, 'resolution must be RESOLVED_VALID or RESOLVED_BREACH');
+      const notes = text(body.notes, 1000);
+      if (notes.length < 5) throw new HttpError(400, 'Write a short note explaining the resolution');
+      try {
+        return { dispute: ctx.accessLogManager.resolveDispute(decodeURIComponent(m[1]), admin.id, body.resolution, notes) };
+      } catch (err: any) {
+        throw new HttpError(/not found/i.test(err.message) ? 404 : 400, err.message);
+      }
+    }
+    // Retention report (platform admins): what WOULD be archived. Deletes nothing.
+    if (method === 'GET' && pathname === '/api/admin/retention-report') {
+      if (admin.role !== 'PLATFORM_ADMIN') throw new HttpError(403, 'Platform admins only');
+      const report = retentionReport(ctx);
+      ctx.auditManager.appendEntry({ actorId: admin.id, action: 'RETENTION_REPORT_GENERATED', accessType: 'SYSTEM_ADMIN', ipAddress: info.ipAddress, userAgent: info.userAgent, reason: 'Retention report generated (report only, nothing deleted)' });
+      return report;
     }
 
     // National exchange integration view: connector status, last sync, queued, failed (facility admin: own facility).

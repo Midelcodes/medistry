@@ -36,6 +36,7 @@ import type { DuplicateReview, PatientMerge } from '../identity/mpi.ts';
 import type { OutboxMessage, OutboxRepo } from '../integrations/hie/nationalExchange.ts';
 import type { FacilityApplication, StaffInvite } from '../facilities/onboarding.ts';
 import type { Subscription, SubscriptionRepo } from '../billing/billingService.ts';
+import type { AnomalyFlag, AnomalyRepo } from '../audit/anomalyAgent.ts';
 
 export type StorageMode = 'memory' | 'postgres';
 
@@ -113,12 +114,13 @@ export interface Snapshot {
   facilityApplications?: FacilityApplication[];
   staffInvites?: StaffInvite[];
   subscriptions?: Subscription[];
+  anomalyFlags?: AnomalyFlag[];
 }
 
 export interface Persistence extends PatientRepo, FacilityRepo, ClinicianRepo, EmergencyCodeRepo, RecordRepo,
   ConsentRepo, EmergencyGrantRepo, OfflineCardRepo, OfflineScanRepo, AuditRepo, NotificationRepo,
   AccountRepo, ProxyRepo, CredentialDocumentRepo, NotificationDeliveryRepo, FacilityApiClientRepo, FacilityPatientLinkRepo, IntakeSessionRepo,
-  IdentifierRepo, OutboxRepo, SubscriptionRepo {
+  IdentifierRepo, OutboxRepo, SubscriptionRepo, AnomalyRepo {
   saveFacilityApplication(a: FacilityApplication): void;
   saveStaffInvite(i: StaffInvite): void;
   saveDuplicateReview(r: DuplicateReview): void;
