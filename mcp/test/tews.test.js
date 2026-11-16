@@ -41,3 +41,20 @@ test("deterioration: AVPU drop from alert flagged", () => {
   const r = detectDeterioration([normal, { ...normal, avpu: "pain" }]);
   assert.ok(r.flags.some((f) => f.includes("consciousness")));
 });
+// Phase 19 (clinical safety): a value outside every band must never fall through to GREEN.
+test("fractional or missing vitals are refused, not scored as GREEN", () => {
+  for (const bad of [{ respiratoryRate: 8.5 }, { heartRate: 50.5 }, { systolicBP: 100.5 }, { respiratoryRate: undefined }, { temperatureC: NaN }, { mobility: "crawling" }, { avpu: "confused" }]) {
+    assert.throws(() => triage({ ...normal, ...bad }), /Cannot score TEWS/, JSON.stringify(bad));
+  }
+});
+test("every integer band boundary scores as implemented (see docs/clinical/TEWS_VALIDATION_CHECKLIST.md)", () => {
+  const at = (k, v) => scoreTews({ ...normal, [k]: v }).parts[k];
+  const cases = {
+    respiratoryRate: [[8, 2], [9, 0], [14, 0], [15, 1], [20, 1], [21, 2], [29, 2], [30, 3]],
+    heartRate: [[40, 2], [41, 1], [50, 1], [51, 0], [100, 0], [101, 1], [110, 1], [111, 2], [129, 2], [130, 3]],
+    systolicBP: [[70, 3], [71, 2], [80, 2], [81, 1], [100, 1], [101, 0], [199, 0], [200, 2]],
+  };
+  for (const [k, list] of Object.entries(cases)) for (const [v, want] of list) assert.equal(at(k, v), want, `${k}=${v}`);
+  const temp = (t) => scoreTews({ ...normal, temperatureC: t }).parts.temperature;
+  assert.deepEqual([temp(34.9), temp(35), temp(38.4), temp(38.5)], [2, 0, 0, 2]);
+});

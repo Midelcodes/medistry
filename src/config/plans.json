@@ -1,0 +1,36 @@
+{
+  "_comment": "Facility subscription plans, per facility per month. PLACEHOLDER PRICES: every amount below is a placeholder to be replaced with the real price (see the todo fields). Amounts are in the currency's minor unit (kobo for NGN, cents for KES). Patients are never charged: there is no patient plan.",
+  "interval": "monthly",
+  "trialDays": 30,
+  "trialDaysTodo": "TODO: confirm the trial length",
+  "currencies": { "NG": "NGN", "KE": "KES" },
+  "plans": [
+    {
+      "id": "clinic",
+      "name": "Clinic",
+      "description": "Small clinics and single-site facilities",
+      "prices": { "NG": 1000000, "KE": 100000 },
+      "todo": "TODO: placeholder prices; set the real ones"
+    },
+    {
+      "id": "hospital",
+      "name": "Hospital",
+      "description": "Hospitals with several departments",
+      "prices": { "NG": 5000000, "KE": 500000 },
+      "todo": "TODO: placeholder prices; set the real ones"
+    },
+    {
+      "id": "network",
+      "name": "Network",
+      "description": "Multi-site groups and teaching hospitals",
+      "prices": { "NG": 15000000, "KE": 1500000 },
+      "todo": "TODO: placeholder prices; set the real ones"
+    }
+  ],
+  "paystackPlanCodes": {
+    "_todo": "TODO: create the plans in the Paystack test dashboard (POST /plan) and put their plan codes here; until then each period is a one-off charge",
+    "clinic": null,
+    "hospital": null,
+    "network": null
+  }
+}

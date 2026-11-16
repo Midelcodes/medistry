@@ -8,6 +8,34 @@ import crypto from 'node:crypto';
 import type http from 'node:http';
 
 export const DEMO_MODE = process.env.DEMO_MODE !== '0';
+
+/**
+ * Country this deployment serves (ISO 3166-1 alpha-2). New patients and records default to it.
+ * Read on each call so tests and tools can set it. Default NG (earlier behaviour).
+ */
+export function deploymentCountry(env: NodeJS.ProcessEnv = process.env): string {
+  const v = (env.DEPLOYMENT_COUNTRY || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(v) ? v : 'NG';
+}
+
+/** Hosting region of this deployment (DEPLOYMENT_REGION), e.g. a cloud region inside the deployment country. */
+export function deploymentRegion(env: NodeJS.ProcessEnv = process.env): string | null {
+  const v = (env.DEPLOYMENT_REGION || '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9 _.-]{1,63}$/.test(v) ? v : null;
+}
+
+/**
+ * Real data (DEMO_MODE=0) needs an explicit, in-country deployment: DEPLOYMENT_COUNTRY (ISO 3166-1 alpha-2) and
+ * DEPLOYMENT_REGION must both be set. One deployment per country (docs/DEPLOYMENT.md). Throws if not.
+ */
+export function assertDeploymentConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.DEMO_MODE !== '0') return;
+  const missing: string[] = [];
+  if (!/^[A-Za-z]{2}$/.test((env.DEPLOYMENT_COUNTRY || '').trim())) missing.push('DEPLOYMENT_COUNTRY (ISO 3166-1 alpha-2, e.g. NG)');
+  if (!deploymentRegion(env)) missing.push('DEPLOYMENT_REGION (the in-country hosting region)');
+  if (missing.length) throw new Error(`DEMO_MODE=0 needs ${missing.join(' and ')}. See docs/DEPLOYMENT.md.`);
+}
+
 export const SESSION_COOKIE = 'medistry_session';
 export const SESSION_TTL_MS = Math.max(1, parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15) * 60_000;
 
@@ -53,6 +81,22 @@ export function clientIp(req: http.IncomingMessage): string {
     if (xff.length) return xff[xff.length - 1];
   }
   return req.socket.remoteAddress || '127.0.0.1';
+}
+
+/**
+ * Public base URL used in printed QR codes (no trailing slash). APP_URL wins; otherwise the request's
+ * own origin, then http://localhost:PORT. A printed card outlives the request, so set APP_URL in deployments.
+ */
+export function appBaseUrl(req?: http.IncomingMessage): string {
+  const configured = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\/[^\s/]+/i.test(configured)) return configured;
+  const host = req?.headers.host;
+  if (host && /^[A-Za-z0-9.-]+(:\d+)?$/.test(host)) {
+    const forwarded = TRUST_PROXY ? String(req!.headers['x-forwarded-proto'] || '').split(',')[0].trim() : '';
+    const proto = forwarded === 'https' || forwarded === 'http' ? forwarded : 'http';
+    return `${proto}://${host}`;
+  }
+  return `http://localhost:${parseInt(process.env.PORT || '3000', 10) || 3000}`;
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {

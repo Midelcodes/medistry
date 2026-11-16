@@ -7,7 +7,8 @@
 
 import type { ClinicalDataStore } from '../clinical/store.ts';
 import type { PatientEntity } from '../patient/profile.ts';
-import type { SeedClinician, SeedFacility } from '../../../prisma/seed.ts';
+import type { SeedClinician, SeedFacility, SeedEncounter } from '../../../prisma/seed.ts';
+import { ENCOUNTER_TREATMENT_EXTENSION } from '../clinical/encounters.ts';
 import type { ActorContext, ConsentContext } from '../policy/enforcer.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -20,7 +21,8 @@ export function seedClinicalRecords(
   store: ClinicalDataStore,
   patients: PatientEntity[],
   clinicians: SeedClinician[],
-  facilities: SeedFacility[]
+  facilities: SeedFacility[],
+  encountersByPatient?: Map<string, SeedEncounter[]>
 ): void {
   patients.forEach((patient, index) => {
     const primaryFacility = facilities.find((f) => f.id === patient.primaryFacilityId) || facilities[0];
@@ -29,7 +31,7 @@ export function seedClinicalRecords(
     const otherAuthor = clinicians.find((c) => c.facilityId === otherFacility.id) || author;
 
     const ref = { reference: `Patient/${patient.id}` };
-    const write = (clinician: SeedClinician, facility: SeedFacility, resource: any, category?: string) => {
+    const write = (clinician: SeedClinician, facility: SeedFacility, resource: any, category?: string, source?: 'clinician' | 'patient-reported') => {
       const actor: ActorContext = {
         userId: clinician.userId,
         role: 'DOCTOR',
@@ -46,7 +48,7 @@ export function seedClinicalRecords(
         validUntil: new Date(Date.now() + DAY),
         isRevoked: false,
       };
-      store.writeRecord(patient.id, resource, actor, { consent, facilityId: facility.id, category });
+      store.writeRecord(patient.id, resource, actor, { consent, facilityId: facility.id, category, source });
     };
 
     const recorder = { reference: `Practitioner/${author.id}`, display: author.fullName };
@@ -67,11 +69,12 @@ export function seedClinicalRecords(
     });
 
     patient.allergies.forEach((a, i) => {
+      const reported = a.source === 'patient-reported';
       write(author, primaryFacility, {
         resourceType: 'AllergyIntolerance',
         id: crypto.randomUUID(),
         clinicalStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical', code: 'active' }] },
-        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: 'confirmed' }] },
+        verificationStatus: { coding: [{ system: 'http://terminology.hl7.org/CodeSystem/allergyintolerance-verification', code: reported ? 'unconfirmed' : 'confirmed' }] },
         type: 'allergy',
         category: [a.category === 'drug' ? 'medication' : a.category === 'food' ? 'food' : 'environment'],
         criticality: a.severity === 'severe' ? 'high' : 'low',
@@ -80,7 +83,7 @@ export function seedClinicalRecords(
         recordedDate: isoDaysAgo(700 + i * 90),
         recorder,
         reaction: [{ manifestation: [{ text: a.reaction }], severity: a.severity }],
-      });
+      }, undefined, reported ? 'patient-reported' : 'clinician');
     });
 
     patient.activeMedications.forEach((m, i) => {
@@ -96,25 +99,37 @@ export function seedClinicalRecords(
       });
     });
 
-    // Two visits at two different hospitals, so the timeline shows multi-facility provenance
-    const visits: Array<[SeedClinician, SeedFacility, number, 'EMER' | 'AMB' | 'IMP', string, string]> = [
-      [author, primaryFacility, 210 + index * 3, 'AMB', 'Ambulatory', 'Routine specialist review'],
-      [otherAuthor, otherFacility, 45 + index, 'EMER', 'Emergency', 'Acute presentation, stabilised and discharged'],
-    ];
-    visits.forEach(([clin, fac, daysAgo, code, display, reason]) => {
+    // Encounters: the patient's own synthetic visits when given (with diagnosis, treatment and outcome),
+    // otherwise two generic visits at two hospitals so the timeline shows multi-facility provenance.
+    const CLASS_DISPLAY = { EMER: 'Emergency', AMB: 'Ambulatory', IMP: 'Inpatient' } as const;
+    const given = encountersByPatient?.get(patient.id);
+    const visits: Array<{ clin: SeedClinician; fac: SeedFacility; daysAgo: number; code: 'EMER' | 'AMB' | 'IMP'; reason: string; diagnosis?: string; treatment?: string; result?: string }> = given
+      ? given.map((e) => {
+        const fac = facilities.find((f) => f.id === e.facilityId) || primaryFacility;
+        const clin = clinicians.find((c) => c.facilityId === fac.id) || author;
+        return { clin, fac, daysAgo: e.daysAgo, code: e.classCode, reason: e.reason, diagnosis: e.diagnosis, treatment: e.treatment, result: e.result };
+      })
+      : [
+        { clin: author, fac: primaryFacility, daysAgo: 210 + index * 3, code: 'AMB', reason: 'Routine specialist review' },
+        { clin: otherAuthor, fac: otherFacility, daysAgo: 45 + index, code: 'EMER', reason: 'Acute presentation, stabilised and discharged' },
+      ];
+    visits.forEach(({ clin, fac, daysAgo, code, reason, diagnosis, treatment, result }) => {
       const when = isoDaysAgo(daysAgo);
       write(clin, fac, {
         resourceType: 'Encounter',
         id: crypto.randomUUID(),
         status: 'finished',
-        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code, display },
+        class: { system: 'http://terminology.hl7.org/CodeSystem/v3-ActCode', code, display: CLASS_DISPLAY[code] },
         subject: ref,
         participant: [{ individual: { reference: `Practitioner/${clin.id}`, display: clin.fullName } }],
         period: { start: when },
         effectiveDateTime: when,
         reasonCode: [{ text: reason }],
+        ...(diagnosis ? { diagnosis: [{ condition: { reference: `Condition/${crypto.randomUUID()}`, display: diagnosis }, rank: 1 }] } : {}),
+        ...(result ? { hospitalization: { dischargeDisposition: { text: result } } } : {}),
+        ...(treatment ? { extension: [{ url: ENCOUNTER_TREATMENT_EXTENSION, valueString: treatment }] } : {}),
         serviceProvider: { reference: `Organization/${fac.id}`, display: fac.name },
-      });
+      }, undefined, 'clinician');
     });
 
     const labs: Array<[number, number, string]> = [

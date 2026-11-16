@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No secrets: tests generate ephemeral keys and use synthetic data only.
+      - name: Install (root)
+        run: npm ci || npm install
+
+      - name: Test (root)
+        run: npm test
+
+      - name: Check document references
+        run: node scripts/check-doc-paths.mjs
+
+      - name: Install (mcp)
+        working-directory: mcp
+        run: npm ci || npm install
+
+      - name: Test (mcp)
+        working-directory: mcp
+        run: npm test
+
+      # Dependency audit: reported as a warning for now (does not fail the build).
+      - name: Audit (root, high and critical)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: Audit (mcp, high and critical)
+        continue-on-error: true
+        working-directory: mcp
+        run: npm audit --audit-level=high
+
+  # Same root suite with STORAGE=postgres against a real PostgreSQL. Tests that start their own server pin it to
+  # memory storage (they need a fresh demo state each); tests/postgres-storage.test.ts runs only here.
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: medistry
+          POSTGRES_PASSWORD: medistry_ci_only
+          POSTGRES_DB: medistry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U medistry -d medistry"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      STORAGE: postgres
+      DATABASE_URL: postgresql://medistry:medistry_ci_only@localhost:5432/medistry?schema=public
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci || npm install
+
+      # Throwaway secrets for this run only (masked in the log). No repository secrets are used.
+      - name: Generate test secrets
+        run: |
+          FEK=$(openssl rand -hex 32); JWT=$(openssl rand -hex 32); IIK=$(openssl rand -hex 32)
+          CARD=$(node scripts/gen-card-key.mjs 2>/dev/null | sed 's/^OFFLINE_CARD_PRIVATE_KEY=//')
+          echo "::add-mask::$FEK"; echo "::add-mask::$JWT"; echo "::add-mask::$CARD"; echo "::add-mask::$IIK"
+          {
+            echo "FIELD_ENCRYPTION_KEY=$FEK"
+            echo "JWT_SECRET=$JWT"
+            echo "OFFLINE_CARD_PRIVATE_KEY=$CARD"
+            echo "IDENTITY_INDEX_KEY=$IIK"
+          } >> "$GITHUB_ENV"
+
+      - name: Migrate and seed
+        run: npm run seed
+
+      - name: Test (root, STORAGE=postgres)
+        run: npm test
+
+      # Backup and restore drill (docs/DEPLOYMENT.md): encrypted dump with a throwaway GPG key, restore into a second
+      # database, then check row counts and that the restored audit chain verifies.
+      - name: Backup and restore drill
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client gnupg >/dev/null
+          export GNUPGHOME="$(mktemp -d)"
+          gpg --batch --passphrase '' --quick-generate-key "Medistry CI backup <ci-backup@example.org>" default default never
+          export BACKUP_GPG_RECIPIENT=ci-backup@example.org BACKUP_DIR="$(mktemp -d)"
+          npm run seed
+          bash scripts/backup.sh
+          DUMP=$(ls "$BACKUP_DIR"/medistry-*.dump.gpg | head -1)
+          psql "postgresql://medistry:medistry_ci_only@localhost:5432/medistry" -c 'CREATE DATABASE medistry_restore'
+          RESTORE_URL="postgresql://medistry:medistry_ci_only@localhost:5432/medistry_restore?schema=public"
+          RESTORE_DATABASE_URL="$RESTORE_URL" bash scripts/restore.sh "$DUMP"
+          SRC=$(node --experimental-strip-types scripts/verify-restore.ts)
+          DST=$(DATABASE_URL="$RESTORE_URL" node --experimental-strip-types scripts/verify-restore.ts)
+          echo "source:   $SRC"; echo "restored: $DST"
+          test "$SRC" = "$DST"

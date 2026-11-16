@@ -26,6 +26,13 @@ export function scoreTews(o) {
   parts.temperature = o.temperatureC < 35 || o.temperatureC > 38.4 ? 2 : 0;
   parts.avpu = { alert: 0, voice: 1, pain: 2, unresponsive: 3 }[o.avpu];
   parts.trauma = o.trauma ? 1 : 0;
+  // Fail loudly: a value outside every band (e.g. a fractional rate between two integer bands) or a missing or
+  // non-numeric vital would otherwise make the total NaN, and every threshold check below would fall to GREEN.
+  const numeric = ["respiratoryRate", "heartRate", "systolicBP", "temperatureC"].filter((k) => !Number.isFinite(o[k]));
+  const unscored = Object.entries(parts).filter(([, v]) => v === undefined).map(([k]) => k);
+  if (numeric.length || unscored.length) {
+    throw new Error(`Cannot score TEWS: ${[...new Set([...numeric, ...unscored])].join(", ")} missing or outside every band (rates and blood pressure are whole numbers)`);
+  }
   const total = Object.values(parts).reduce((a, b) => a + b, 0);
   return { total, parts };
 }

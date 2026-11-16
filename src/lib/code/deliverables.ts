@@ -5,20 +5,96 @@
  * and (5) Cryptographically Signed Offline Emergency Payload.
  */
 
-import crypto from 'node:crypto';
+import QRCode from 'qrcode';
 import type { PatientEntity } from '../patient/profile.ts';
+import { signCompactJws, verifyCompactJws, getPublicJwks } from '../crypto/cardKeys.ts';
 
 export interface DeliverablesConfig {
   domain: string;
   emergencyHotline: string;
-  offlineSigningKey?: string;
+  /** Base URL printed in QR codes (e.g. APP_URL). Defaults to https://<domain>. */
+  baseUrl?: string;
 }
 
 export const DEFAULT_CONFIG: DeliverablesConfig = {
   domain: 'medistry.health',
   emergencyHotline: '+234 800 420 6337',
-  offlineSigningKey: 'medistry_offline_hmac_secret_key_minimum_32_characters_for_safety',
 };
+
+/** Issuer of offline cards. Medistry is not a government authority and the token must not claim to be one. */
+export const OFFLINE_CARD_ISSUER = 'medistry';
+
+// ---------------------------------------------------------------------------
+// Real QR codes (qrcode package, error correction level M)
+// ---------------------------------------------------------------------------
+
+/** Offline card scanner page. The token goes after '#', so browsers never send it to the server. */
+export const CARD_SCANNER_PATH = '/s';
+export const QR_ERROR_CORRECTION = 'M';
+const QR_QUIET_ZONE = 4; // modules of white border required by the QR specification
+
+const scanBase = (config: DeliverablesConfig) => (config.baseUrl || `https://${config.domain}`).replace(/\/+$/, '');
+
+/** QR text for an offline card: ${baseUrl}/s#<signed token>. */
+export function buildCardQrText(token: string, baseUrl: string): string {
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) throw new Error('Card token is not a compact JWS');
+  return `${baseUrl.replace(/\/+$/, '')}${CARD_SCANNER_PATH}#${token}`;
+}
+
+/** Builds the QR symbol, failing with a clear message if the text does not fit (version 40 at level M). */
+export function createQrSymbol(text: string): { version: number; size: number; isDark: (x: number, y: number) => boolean } {
+  let qr: any;
+  try {
+    qr = QRCode.create(text, { errorCorrectionLevel: QR_ERROR_CORRECTION });
+  } catch (err: any) {
+    throw new Error(`QR content is too large (${text.length} characters) for a version 40 QR code at error correction level ${QR_ERROR_CORRECTION}: ${err?.message || err}`);
+  }
+  if (qr.version > 40) throw new Error(`QR version ${qr.version} exceeds 40`);
+  const size: number = qr.modules.size;
+  return { version: qr.version, size, isDark: (x, y) => !!qr.modules.get(y, x) };
+}
+
+/**
+ * Renders a QR code as SVG: one dark square per module, a 4-module quiet zone, crisp edges.
+ * The SVG contains no text, so nothing user-supplied is interpolated.
+ */
+export function generateQrSvg(text: string, opts: { sizeAttr?: string; label?: string } = {}): string {
+  const { size, isDark } = createQrSymbol(text);
+  const total = size + QR_QUIET_ZONE * 2;
+  let path = '';
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (isDark(x, y)) path += `M${x + QR_QUIET_ZONE} ${y + QR_QUIET_ZONE}h1v1h-1z`;
+    }
+  }
+  const sizeAttr = opts.sizeAttr ? ` width="${opts.sizeAttr}" height="${opts.sizeAttr}"` : '';
+  const label = (opts.label || 'QR code').replace(/[^A-Za-z0-9 .,:()-]/g, '');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${total} ${total}"${sizeAttr} shape-rendering="crispEdges" role="img" aria-label="${label}"><rect width="${total}" height="${total}" fill="#ffffff"/><path fill="#000000" d="${path}"/></svg>`;
+}
+
+/** PNG data URL of the same QR code (for download). */
+export async function generateQrPngDataUrl(text: string, scale = 8): Promise<string> {
+  createQrSymbol(text); // same size check and error message as the SVG
+  return QRCode.toDataURL(text, { errorCorrectionLevel: QR_ERROR_CORRECTION, margin: QR_QUIET_ZONE, scale, color: { dark: '#000000', light: '#ffffff' } });
+}
+
+/** QR for an offline card token: the text, its version, an SVG and a PNG data URL. */
+export async function generateCardQr(token: string, baseUrl: string): Promise<{ text: string; version: number; modules: number; svg: string; pngDataUrl: string }> {
+  const text = buildCardQrText(token, baseUrl);
+  const { version, size } = createQrSymbol(text);
+  return {
+    text,
+    version,
+    modules: size,
+    svg: generateQrSvg(text, { label: 'Medistry emergency card QR code' }),
+    pngDataUrl: await generateQrPngDataUrl(text),
+  };
+}
+
+/** Embeds a QR SVG inside another SVG at (x, y) with the given width/height. */
+function nestedQr(text: string, x: number, y: number, w: number): string {
+  return generateQrSvg(text, { label: 'Emergency code QR' }).replace('<svg ', `<svg x="${x}" y="${y}" width="${w}" height="${w}" `);
+}
 
 /**
  * 1. Generates the SVG vector representation for a standard ID-1 Wallet Card (85.6mm x 53.98mm).
@@ -29,7 +105,7 @@ export function generateWalletCardSvg(
   ifFoundContact?: string,
   config: DeliverablesConfig = DEFAULT_CONFIG
 ): string {
-  const scanUrl = `https://${config.domain}/e/${formattedCode}`;
+  const scanUrl = `${scanBase(config)}/e/${formattedCode}`;
   const foundText = ifFoundContact ? `IF FOUND CALL: ${ifFoundContact}` : `24/7 HELPLINE: ${config.emergencyHotline}`;
 
   return `
@@ -64,26 +140,11 @@ export function generateWalletCardSvg(
   <text x="48" y="348" fill="rgba(255,255,255,0.7)" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="600">${foundText}</text>
   <text x="48" y="374" fill="rgba(255,255,255,0.5)" font-family="'Plus Jakarta Sans', sans-serif" font-size="9.5">NO MEDICAL DATA STORED ON CARD • BREAK-GLASS CLINICAL GATEWAY</text>
 
-  <!-- Right: Simulated High-Contrast QR Code Block -->
-  <g transform="translate(456, 120)">
-    <rect width="180" height="180" rx="16" fill="#FFFFFF"/>
-    <!-- Mock QR pattern corners -->
-    <rect x="18" y="18" width="40" height="40" rx="6" fill="#1C2038"/>
-    <rect x="26" y="26" width="24" height="24" fill="#FFFFFF"/>
-    <rect x="32" y="32" width="12" height="12" fill="#1C2038"/>
-
-    <rect x="122" y="18" width="40" height="40" rx="6" fill="#1C2038"/>
-    <rect x="130" y="26" width="24" height="24" fill="#FFFFFF"/>
-    <rect x="136" y="32" width="12" height="12" fill="#1C2038"/>
-
-    <rect x="18" y="122" width="40" height="40" rx="6" fill="#1C2038"/>
-    <rect x="26" y="130" width="24" height="24" fill="#FFFFFF"/>
-    <rect x="32" y="136" width="12" height="12" fill="#1C2038"/>
-
-    <!-- Center Cross Badge -->
-    <circle cx="90" cy="90" r="22" fill="#5B64E8"/>
-    <path d="M90 78 V102 M78 90 H102" stroke="#FFFFFF" stroke-width="4.5" stroke-linecap="round"/>
-    <text x="90" y="170" text-anchor="middle" fill="#1C2038" font-family="'Plus Jakarta Sans', sans-serif" font-size="9" font-weight="800">BREAK-GLASS GATE</text>
+  <!-- Right: real QR code of the online emergency gate URL -->
+  <g transform="translate(456, 108)">
+    <rect width="180" height="180" rx="12" fill="#FFFFFF"/>
+    ${nestedQr(scanUrl, 6, 6, 168)}
+    <text x="90" y="204" text-anchor="middle" fill="#FFFFFF" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="800">BREAK-GLASS GATE</text>
   </g>
 
   <!-- Gradient Definition -->
@@ -127,10 +188,9 @@ export function generateWristbandSvg(
     <text x="125" y="38" text-anchor="middle" fill="#0F172A" font-family="'Space Grotesk', monospace" font-size="20" font-weight="700">${formattedCode}</text>
   </g>
 
-  <!-- Compact QR Code box -->
-  <g transform="translate(840, 10)">
-    <rect width="80" height="80" rx="8" fill="#1E2038"/>
-    <text x="40" y="46" text-anchor="middle" fill="#FFFFFF" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="800">SCAN</text>
+  <!-- Real QR code of the online emergency gate URL -->
+  <g transform="translate(840, 6)">
+    ${nestedQr(`${scanBase(config)}/e/${formattedCode}`, 0, 0, 88)}
   </g>
 </svg>
 `.trim();
@@ -140,7 +200,7 @@ export function generateWristbandSvg(
  * 3. Add-to-Lock-Screen & Mobile Wallpaper Specs and Instructions.
  */
 export function getLockScreenGuide(formattedCode: string, config: DeliverablesConfig = DEFAULT_CONFIG) {
-  const scanUrl = `https://${config.domain}/e/${formattedCode}`;
+  const scanUrl = `${scanBase(config)}/e/${formattedCode}`;
   return {
     scanUrl,
     code: formattedCode,
@@ -195,21 +255,22 @@ export function generateNfcNdefPayload(
 }
 
 /**
- * 5. Generates a Cryptographically Signed Offline Emergency Payload.
- * Enables ambulance/first-responder offline apps to verify clinical triage data without cell service.
+ * 5. Generates an ES256-signed offline emergency payload (compact JWS, see crypto/cardKeys.ts).
+ * Scanners verify it offline with the published public key, which cannot be used to sign.
+ * `config` is accepted for backward compatibility and is not used for signing.
  */
 export function generateOfflineSignedPayload(
   patient: PatientEntity,
   formattedCode: string,
   expiresInDays = 30,
-  config: DeliverablesConfig = DEFAULT_CONFIG
+  _config: DeliverablesConfig = DEFAULT_CONFIG
 ): { token: string; payload: Record<string, any>; signature: string } {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + expiresInDays * 86400;
 
   // Minimal critical triage data only
   const payload = {
-    iss: 'MEDISTRY_REGIONAL_HEALTH_AUTHORITY',
+    iss: OFFLINE_CARD_ISSUER,
     sub: patient.id,
     code: formattedCode,
     bloodGroup: patient.bloodGroup,
@@ -222,53 +283,21 @@ export function generateOfflineSignedPayload(
     exp,
   };
 
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-
-  const signingInput = `${encodedHeader}.${encodedPayload}`;
-  const key = config.offlineSigningKey || DEFAULT_CONFIG.offlineSigningKey!;
-  const signature = crypto.createHmac('sha256', key).update(signingInput).digest('base64url');
-
-  const token = `${signingInput}.${signature}`;
-
+  const token = signCompactJws(payload);
   return {
     token,
     payload,
-    signature,
+    signature: token.split('.')[2],
   };
 }
 
 /**
- * Verifies a signed offline emergency payload.
+ * Verifies a signed offline emergency payload against a JWK set (default: this server's published keys).
+ * Only ES256 is accepted.
  */
 export function verifyOfflineSignedPayload(
   token: string,
-  config: DeliverablesConfig = DEFAULT_CONFIG
+  jwks: JsonWebKey[] = getPublicJwks()
 ): { valid: boolean; payload?: Record<string, any>; error?: string } {
-  const parts = token.split('.');
-  if (parts.length !== 3) {
-    return { valid: false, error: 'Malformed token structure' };
-  }
-
-  const [encodedHeader, encodedPayload, providedSignature] = parts;
-  const signingInput = `${encodedHeader}.${encodedPayload}`;
-  const key = config.offlineSigningKey || DEFAULT_CONFIG.offlineSigningKey!;
-  const expectedSignature = crypto.createHmac('sha256', key).update(signingInput).digest('base64url');
-
-  if (providedSignature !== expectedSignature) {
-    return { valid: false, error: 'Cryptographic signature mismatch: offline card has been altered' };
-  }
-
-  try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && now > payload.exp) {
-      return { valid: false, error: 'Offline emergency card signature has expired' };
-    }
-    return { valid: true, payload };
-  } catch {
-    return { valid: false, error: 'Failed to parse payload JSON' };
-  }
+  return verifyCompactJws(token, jwks);
 }
-

@@ -110,6 +110,15 @@ export class ClinicalTimelineEngine {
         const docTitle = resource.content?.[0]?.attachment?.title || 'Clinical Report';
         return { title, summary: `${docTitle} (${resource.content?.[0]?.attachment?.contentType})` };
       }
+      case 'MedicationDispense': {
+        const title = `Dispensed: ${(resource as any).medicationCodeableConcept?.text || 'Medication'}`;
+        const q = (resource as any).quantity;
+        return { title, summary: `${q ? `${q.value} ${q.unit || ''}`.trim() : 'Quantity not recorded'} • ${(resource as any).whenHandedOver || ''}` };
+      }
+      case 'DiagnosticReport': {
+        const title = `Report: ${resource.code?.text || 'Diagnostic report'}`;
+        return { title, summary: `${resource.conclusion || 'No conclusion recorded'} • Status: ${resource.status}` };
+      }
       default:
         return { title: 'Clinical Record', summary: 'HL7 FHIR Record Entry' };
     }

@@ -1,4 +1,4 @@
-/* Clinician console: sign-in, safe lookup, consent request by OTP, records, emergency grants and co-sign. */
+/* Clinician console: sign-in, safe lookup, consent request by OTP, records, emergency grants, co-sign, and AI intake review. */
 (function () {
   const { $, api, esc, fmtDate, Session, setError, showToast, initTabs, bindClinicianLogin, signOut, renderTimeline, renderProfile } = window.Medistry;
   const fail = (err) => {
@@ -188,8 +188,153 @@
   $('#cl-logout').addEventListener('click', async () => { await signOut(); renderState(); });
 
   bindClinicianLogin({
-    form: '#cl-login-form', select: '#cl-clinician', totp: '#cl-totp',
+    form: '#cl-login-form', select: '#cl-clinician', totp: '#cl-totp', password: '#cl-password',
     error: '#cl-login-error', showCode: '#cl-show-code', onSignedIn: renderState,
   });
   renderState();
+
+  // ---- Intake from paper or voice (AI drafts; the doctor reviews, edits and signs) ----
+  let intake = null;      // current review payload
+  let recorder = null;
+  let voiceBlob = null;
+  const inErr = () => $('#in-error');
+
+  async function loadIntake() {
+    const { grants } = await api('/api/clinician/consents');
+    const active = grants.filter((g) => g.status === 'ACTIVE');
+    $('#in-patient').innerHTML = active.length
+      ? active.map((g) => `<option value="${esc(g.patientId)}">${esc(g.patientInitials)}</option>`).join('')
+      : '<option value="">No patient has consented yet</option>';
+  }
+  loaders.intake = loadIntake;
+
+  document.querySelectorAll('input[name="in-kind"]').forEach((r) => r.addEventListener('change', () => {
+    const kind = document.querySelector('input[name="in-kind"]:checked').value;
+    $('#in-text-group').hidden = kind !== 'text';
+    $('#in-photo-group').hidden = kind !== 'photo';
+    $('#in-voice-group').hidden = kind !== 'voice';
+  }));
+
+  $('#in-rec').addEventListener('click', async () => {
+    if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        voiceBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        $('#in-rec').querySelector('span').textContent = 'Record again';
+        $('#in-rec-status').textContent = `Recorded (${Math.round(voiceBlob.size / 1024)} KB)`;
+      };
+      recorder.start();
+      $('#in-rec').querySelector('span').textContent = 'Stop recording';
+      $('#in-rec-status').textContent = 'Recording…';
+    } catch (ex) { setError(inErr(), 'The microphone is not available. Paste the text instead.'); }
+  });
+
+  const toBase64 = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('Could not read the file'));
+    reader.readAsDataURL(blob);
+  });
+
+  $('#intake-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setError(inErr(), '');
+    const btn = $('button[type="submit"]', e.target);
+    btn.disabled = true;
+    try {
+      const kind = document.querySelector('input[name="in-kind"]:checked').value;
+      const body = { patientId: $('#in-patient').value, kind };
+      if (kind === 'text') body.text = $('#in-text').value;
+      if (kind === 'photo') {
+        const f = $('#in-photo').files[0];
+        if (!f) throw new Error('Choose or take a photo first');
+        body.file = { filename: f.name, mimeType: f.type, contentBase64: await toBase64(f) };
+      }
+      if (kind === 'voice') {
+        if (!voiceBlob) throw new Error('Record a voice note first');
+        body.file = { filename: 'voice-note', mimeType: voiceBlob.type, contentBase64: await toBase64(voiceBlob) };
+      }
+      showReview(await api('/api/clinician/intake', { method: 'POST', body }));
+    } catch (ex) { setError(inErr(), ex.message); } finally { btn.disabled = false; }
+  });
+
+  /** Source text with every proposed span highlighted (escaped; spans come from the server). */
+  function renderSource(text, proposals) {
+    const spans = [];
+    for (const p of proposals) for (const f of p.fields) if (f.span) spans.push({ ...f.span, id: `${p.key}:${f.path}` });
+    spans.sort((a, b) => a.start - b.start);
+    let html = '';
+    let at = 0;
+    for (const s of spans) {
+      if (s.start < at) continue; // overlapping spans: the first one wins
+      html += esc(text.slice(at, s.start)) + `<mark data-span="${esc(s.id)}">${esc(text.slice(s.start, s.end))}</mark>`;
+      at = s.end;
+    }
+    $('#in-source').innerHTML = html + esc(text.slice(at));
+  }
+
+  function showReview(v) {
+    intake = v;
+    $('#intake-start').hidden = true;
+    $('#intake-review').hidden = false;
+    const drafts = v.proposals.filter((p) => p.state === 'draft').length;
+    $('#in-meta').textContent = `Proposed by ${v.adapters.llm}${v.adapters.ocr ? `, OCR ${v.adapters.ocr}` : ''}${v.adapters.stt ? `, speech-to-text ${v.adapters.stt}` : ''}. ${drafts} draft(s) to review, ${v.lowConfidenceFields} value(s) flagged.`;
+    $('#in-sign-all').disabled = drafts === 0;
+    renderSource(v.sourceText, v.proposals);
+    $('#in-proposals').innerHTML = v.proposals.length ? v.proposals.map((p) => `
+      <div class="list-card intake-card" data-key="${esc(p.key)}">
+        <div style="flex:1">
+          <div class="lc-title">${esc(p.resourceType)} <span class="badge ${p.state === 'signed' ? 'green' : p.state === 'discarded' ? 'grey' : 'amber'}">${esc(p.state)}</span></div>
+          ${p.fields.map((f) => `
+            <div class="intake-field${f.lowConfidence ? ' low' : ''}">
+              <label for="f-${esc(p.key)}-${esc(f.path)}">${esc(f.path)}${f.lowConfidence ? ' <span class="badge amber">check</span>' : ''}${f.edited ? ' <span class="badge">edited</span>' : ''}</label>
+              <input id="f-${esc(p.key)}-${esc(f.path)}" data-path="${esc(f.path)}" data-span="${esc(`${p.key}:${f.path}`)}" value="${esc(f.value)}" ${p.state === 'draft' ? '' : 'disabled'}>
+              <span class="intake-from">${f.span ? `From: “${esc(f.span.text)}”` : 'Not found in the source text'}</span>
+            </div>`).join('')}
+        </div>
+        ${p.state === 'draft' ? `<div class="lc-actions">
+          <button type="button" class="btn btn-secondary-pill btn-small" data-save="${esc(p.recordId)}">Save edits</button>
+          <button type="button" class="btn-text-link" data-discard="${esc(p.recordId)}">Discard</button>
+        </div>` : ''}
+      </div>`).join('') : '<p class="empty-note">Nothing was recognised in this note. Labelled lines such as "Diagnosis: …" work best.</p>';
+  }
+
+  $('#in-proposals').addEventListener('focusin', (e) => {
+    const id = e.target.dataset && e.target.dataset.span;
+    document.querySelectorAll('#in-source mark').forEach((m) => m.classList.toggle('active', m.dataset.span === id));
+  });
+  $('#in-proposals').addEventListener('click', async (e) => {
+    const save = e.target.closest('[data-save]');
+    const discard = e.target.closest('[data-discard]');
+    try {
+      if (save) {
+        const card = save.closest('.intake-card');
+        const fields = {};
+        card.querySelectorAll('input[data-path]').forEach((i) => { fields[i.dataset.path] = i.value; });
+        showReview(await api(`/api/clinician/intake/${encodeURIComponent(intake.intakeId)}/drafts/${encodeURIComponent(save.dataset.save)}`, { method: 'POST', body: { fields } }));
+        showToast('Draft updated', 'Your edit is saved as a new draft version.');
+      }
+      if (discard) {
+        showReview(await api(`/api/clinician/intake/${encodeURIComponent(intake.intakeId)}/drafts/${encodeURIComponent(discard.dataset.discard)}/discard`, { method: 'POST', body: { reason: 'Discarded at review' } }));
+      }
+    } catch (ex) { fail(ex); }
+  });
+  $('#in-sign-all').addEventListener('click', async () => {
+    try {
+      showReview(await api(`/api/clinician/intake/${encodeURIComponent(intake.intakeId)}/sign`, { method: 'POST', body: {} }));
+      showToast('Signed', 'The drafts are now part of the patient record.');
+    } catch (ex) { fail(ex); }
+  });
+  $('#in-close').addEventListener('click', () => {
+    intake = null;
+    voiceBlob = null;
+    $('#intake-review').hidden = true;
+    $('#intake-start').hidden = false;
+    $('#in-text').value = '';
+  });
 })();

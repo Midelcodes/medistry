@@ -4,6 +4,8 @@
  */
 
 import crypto from 'node:crypto';
+import type { AuditRepo } from '../data/repositories.ts';
+import { applyActing } from './actingContext.ts';
 
 export interface AuditRecordPayload {
   sequenceNumber: number;
@@ -60,6 +62,8 @@ export function computeAuditEntryHash(
  */
 export class AuditChainManager {
   private chain: ChainedAuditEntry[] = [];
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: AuditRepo;
 
   constructor(initialEntries: ChainedAuditEntry[] = []) {
     this.chain = [...initialEntries];
@@ -87,7 +91,7 @@ export class AuditChainManager {
     const timestamp = rawPayload.timestamp || new Date().toISOString();
 
     const fullPayload: AuditRecordPayload = {
-      ...rawPayload,
+      ...applyActing(rawPayload), // a proxy's request is recorded under the proxy's identity
       sequenceNumber,
       timestamp,
     };
@@ -102,6 +106,7 @@ export class AuditChainManager {
     };
 
     this.chain.push(entry);
+    this.persistence?.appendAudit(entry);
     return entry;
   }
 

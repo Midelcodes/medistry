@@ -9,71 +9,64 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { generateSeedData } from '../prisma/seed.ts';
-import { AuditChainManager } from './lib/audit/hashChain.ts';
-import { ClinicalDataStore } from './lib/clinical/store.ts';
-import { ClinicalTimelineEngine } from './lib/clinical/timeline.ts';
-import { NotificationDispatcher, ConsoleNotificationProvider } from './lib/notifications/dispatcher.ts';
-import { EmergencyBreakGlassEngine } from './lib/emergency/breakGlassEngine.ts';
 import { renderEmergencySummaryHtml } from './lib/emergency/summaryRenderer.ts';
 import { OfflineEmergencyCardManager } from './lib/emergency/offlineCard.ts';
-import { generateWalletCardSvg, generateWristbandSvg } from './lib/code/deliverables.ts';
+import { getPublicJwks } from './lib/crypto/cardKeys.ts';
+import { escapeHtml } from './lib/security/rateLimiter.ts';
+import { generateWalletCardSvg, generateWristbandSvg, DEFAULT_CONFIG } from './lib/code/deliverables.ts';
 import { SlidingWindowRateLimiter, getSecurityHttpHeaders } from './lib/security/rateLimiter.ts';
-import { ConsentLifecycleManager } from './lib/consent/consentManager.ts';
-import { PatientAccessLogManager } from './lib/audit/accessLogManager.ts';
-import { decryptPatientDemographics, type PatientEntity } from './lib/patient/profile.ts';
-import { seedClinicalRecords } from './lib/site/seedClinical.ts';
+import { decryptPatientDemographics } from './lib/patient/profile.ts';
 import { createPortalApi } from './lib/site/portalApi.ts';
+import { createPersistence } from './lib/data/storage.ts';
+import { createRuntime } from './lib/runtime.ts';
+import { scannerStrings } from './lib/i18n/translations.ts';
 import { normalizePatientCode } from './lib/code/crockford.ts';
-import { clientIp as getClientIp, DEMO_MODE } from './lib/security/config.ts';
+import { appBaseUrl, assertDeploymentConfig, clientIp as getClientIp, DEMO_MODE, deploymentCountry, deploymentRegion } from './lib/security/config.ts';
+import { registryFor } from './lib/clinician/verification.ts';
+import { keyProvider } from './lib/crypto/keyProvider.ts';
+import { ClamdVirusScannerAdapter, createVirusScanner } from './lib/clinical/virusScanners.ts';
+import { log, requestIdFrom } from './lib/ops/logger.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
-// 1. Initialize In-Memory Data Store & Engines
-console.log('📦 Initializing MEDISTRY Clinical Store and Cryptographic Engines...');
-const seedData = generateSeedData();
-const auditManager = new AuditChainManager();
-const clinicalStore = new ClinicalDataStore(auditManager);
-const timelineEngine = new ClinicalTimelineEngine(clinicalStore);
-const consoleProvider = new ConsoleNotificationProvider();
-const dispatcher = new NotificationDispatcher(consoleProvider);
-const emergencyEngine = new EmergencyBreakGlassEngine(auditManager, clinicalStore, timelineEngine, dispatcher);
-const offlineCardManager = new OfflineEmergencyCardManager();
+const STARTED_AT = Date.now();
+const VERSION: string = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf-8')).version || 'unknown'; } catch { return 'unknown'; }
+})();
+
+// 1. Storage and engines. Memory by default; STORAGE=postgres + DATABASE_URL writes through to PostgreSQL and
+// rebuilds the working set from it at start-up (see src/lib/data/repositories.ts).
+const startupFailed = (err: any): never => {
+  // One clear line (no stack dump of the database client, no connection strings).
+  console.error(`Startup failed: ${String(err?.message || err).split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean).pop()}`);
+  process.exit(1);
+};
+// Real data must run in an explicitly configured, in-country deployment.
+try { assertDeploymentConfig(); } catch (err) { startupFailed(err); }
+// Keys load at startup, so a missing production key (or an unimplemented KMS provider) fails closed immediately.
+let offlineCardManager: OfflineEmergencyCardManager;
+try {
+  keyProvider().getFieldEncryptionKey();
+  keyProvider().getCardKid();
+  offlineCardManager = new OfflineEmergencyCardManager();
+} catch (err) { startupFailed(err); }
+const scanner = createVirusScanner();
+const persistence = await createPersistence().catch(startupFailed);
+const runtime = await createRuntime(persistence).catch(startupFailed);
+// Where this instance runs and what it uses. No secrets, no personal data.
+log('info', 'startup', {
+  version: VERSION, demoMode: DEMO_MODE, country: deploymentCountry(), region: deploymentRegion() || 'not set',
+  storage: persistence.mode, keyProvider: keyProvider().kind, malwareScanner: scanner.name, smsProvider: (process.env.SMS_PROVIDER || 'console').trim(),
+});
+const { seedData, patientsById, patientsByCode, codeByPatient, auditManager, clinicalStore, timelineEngine,
+  consoleProvider, emergencyEngine, offlineCardStore, consentManager, accessLogManager, recordFlags, offlineScans,
+  accounts, patientAuth, staff, proxies, deliveries, ussd, apiClients, fhirImport, intake, mpi, registration, nationalExchange, pharmacy, addFacility,
+  billing, onboarding, anomalyAgent } = runtime;
 const rateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 300 });
 // Stricter limit on emergency-code lookups to slow code enumeration
 const gateLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: 20 });
-const consentManager = new ConsentLifecycleManager(auditManager);
-const accessLogManager = new PatientAccessLogManager(auditManager);
-
-// Index patients by ID and by emergency code (raw and formatted)
-const patientsById = new Map<string, PatientEntity>();
-const patientsByCode = new Map<string, PatientEntity>();
-const codeByPatient = new Map<string, { rawCode: string; formattedCode: string }>();
-
-for (const entry of seedData.patients) {
-  patientsById.set(entry.patient.id, entry.patient);
-  patientsByCode.set(entry.emergencyCode.rawCode, entry.patient);
-  patientsByCode.set(entry.emergencyCode.formattedCode, entry.patient);
-  codeByPatient.set(entry.patient.id, {
-    rawCode: entry.emergencyCode.rawCode,
-    formattedCode: entry.emergencyCode.formattedCode,
-  });
-}
-
-// Resolve provenance names and seed synthetic FHIR records for the timelines
-for (const f of seedData.facilities) {
-  timelineEngine.registerFacility(f.id, f.name);
-  accessLogManager.registerFacility(f.id, f.name);
-}
-for (const c of seedData.clinicians) {
-  timelineEngine.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
-  timelineEngine.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
-  accessLogManager.registerClinician(c.id, `${c.fullName} (${c.specialty})`);
-  accessLogManager.registerClinician(c.userId, `${c.fullName} (${c.specialty})`);
-}
-seedClinicalRecords(clinicalStore, seedData.patients.map((p) => p.patient), seedData.clinicians, seedData.facilities);
 
 const SITE_DIR = path.join(ROOT_DIR, 'site');
 const handlePortalApi = createPortalApi({
@@ -88,26 +81,91 @@ const handlePortalApi = createPortalApi({
   accessLogManager,
   emergencyEngine,
   notifications: consoleProvider,
+  offlineCards: offlineCardStore,
+  recordFlags,
+  offlineScans,
+  persistence,
   dataDir: path.join(ROOT_DIR, 'data'),
+  accounts,
+  patientAuth,
+  staff,
+  proxies,
+  deliveries,
+  ussd,
+  apiClients,
+  fhirImport,
+  intake,
+  mpi,
+  registration,
+  nationalExchange,
+  pharmacy,
+  addFacility,
+  billing,
+  onboarding,
+  anomalyAgent,
 });
 
+// Outbox worker: sends due national-exchange messages (retries with backoff, then dead-letters).
+const OUTBOX_POLL_MS = Math.max(5, parseInt(process.env.OUTBOX_POLL_SECONDS || '30', 10) || 30) * 1000;
+setInterval(() => {
+  nationalExchange.processDue().catch((err) => log('error', 'outbox_worker_failed', { error: String(err?.message || err) }));
+}, OUTBOX_POLL_MS).unref();
+
+// Audit agent: rule-based anomaly flags for platform-admin review (no automatic action). Runs at start-up too.
+const ANOMALY_SCAN_MS = Math.max(5, parseInt(process.env.ANOMALY_SCAN_MINUTES || '60', 10) || 60) * 60_000;
+const scanForAnomalies = () => {
+  try {
+    const created = anomalyAgent.run();
+    if (created.length) log('info', 'anomaly_flags_created', { count: created.length });
+  } catch (err: any) { log('error', 'anomaly_scan_failed', { error: String(err?.message || err) }); }
+};
+scanForAnomalies();
+setInterval(scanForAnomalies, ANOMALY_SCAN_MS).unref();
+
+// Daily housekeeping: licence re-verification reminders, and ending guardian control at the patient's 18th
+// birthday (also enforced on every request). Runs once at start-up.
+const housekeeping = () => {
+  proxies.enforceExpiry();
+  staff.sendLicenceReminders().catch((err) => log('error', 'licence_reminders_failed', { error: String(err?.message || err) }));
+};
+housekeeping();
+setInterval(housekeeping, 24 * 60 * 60 * 1000).unref();
+
 // Site pages: shared layout + one template per page
-const PAGES: Record<string, { file: string; nav: string; title: string; description: string; script?: string }> = {
+// permissions: a Permissions-Policy that replaces the default (camera and microphone are off everywhere else).
+type PageDef = { file: string; nav: string; title: string; description: string; script?: string; module?: boolean; permissions?: string };
+const PAGES: Record<string, PageDef> = {
   '/': { file: 'home', nav: 'home', title: 'Medistry | Portable Medical Records & Emergency Access', description: 'Medistry gives patients control of their FHIR-based medical records and lets verified clinicians reach life-saving information through an audited emergency break-glass scan.' },
   '/about': { file: 'about', nav: 'about', title: 'About | Medistry', description: 'Why Medistry exists, the principles behind it, and how it aligns with the Nigeria Data Protection Act 2023.' },
   '/features': { file: 'features', nav: 'features', title: 'Features | Medistry', description: 'Patient-controlled records, verified clinician access, emergency QR and NFC codes, encryption and a tamper-evident audit log.', script: 'features' },
   '/how-it-works': { file: 'how-it-works', nav: 'how', title: 'How It Works | Medistry', description: 'From a random emergency code to a read-only, 60-minute break-glass grant, step by step.' },
   '/emergency': { file: 'emergency', nav: 'emergency', title: 'Emergency Access | Medistry', description: 'Scan or enter a patient emergency code to start the clinician break-glass process.', script: 'emergency' },
   '/patients': { file: 'patients', nav: 'patients', title: 'Patient Portal | Medistry', description: 'View your record timeline, approve or revoke access, see who accessed your record, and manage your emergency code.', script: 'patients' },
-  '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians' },
+  // Microphone for voice-note intake (Phase 15); photos use the file picker, which needs no camera permission.
+  '/clinicians': { file: 'clinicians', nav: 'clinicians', title: 'Clinician Console | Medistry', description: 'Sign in, look up a patient, request consent, read records and co-sign emergency access.', script: 'clinicians', permissions: 'camera=(), microphone=(self), geolocation=(), payment=()' },
   '/facilities': { file: 'facilities', nav: 'facilities', title: 'Facilities | Medistry', description: 'Accredited facilities and verified clinicians on Medistry.', script: 'facilities' },
+  '/facility-admin': { file: 'facility-admin', nav: '', title: 'Facility Admin | Medistry', description: 'Run your facility on Medistry: staff, integrations, usage and billing.', script: 'facility-admin' },
   '/status': { file: 'status', nav: '', title: 'Platform Status | Medistry', description: 'Live health of this Medistry environment.', script: 'status' },
   '/contact': { file: 'contact', nav: 'contact', title: 'Contact | Medistry', description: 'Talk to the Medistry team about onboarding, integration or a walkthrough.', script: 'contact' },
 };
 
 const NAV_KEYS = ['home', 'about', 'features', 'how', 'patients', 'clinicians', 'emergency', 'facilities', 'contact'];
 
-function renderPage(page: { file: string; nav: string; title: string; description: string; script?: string }, extra: Record<string, string> = {}): string | null {
+// Offline card scanner. Not in PAGES: it embeds the public keys and its strings, and may use the camera.
+const SCAN_PAGE: PageDef = {
+  file: 'scan', nav: 'emergency', title: 'Emergency Scan | Medistry',
+  description: 'Scan and verify a Medistry offline emergency card on this device, even without internet.',
+  script: 'scan', module: true,
+};
+
+/** JSON that is safe inside <script type="application/json"> (cannot close the tag or break the page). */
+function jsonForScriptTag(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+function renderPage(page: PageDef, extra: Record<string, string> = {}): string | null {
   try {
     let html = fs.readFileSync(path.join(SITE_DIR, 'layout.html'), 'utf-8');
     const content = fs.readFileSync(path.join(SITE_DIR, 'pages', `${page.file}.html`), 'utf-8');
@@ -115,7 +173,9 @@ function renderPage(page: { file: string; nav: string; title: string; descriptio
       .replace('{{content}}', () => content)
       .replace(/\{\{title\}\}/g, () => page.title.replace(/&/g, '&amp;'))
       .replace(/\{\{description\}\}/g, () => page.description.replace(/"/g, '&quot;'))
-      .replace('{{pageScript}}', () => (page.script ? `<script src="/js/${page.script}.js" defer></script>` : ''));
+      .replace('{{pageScript}}', () => (page.script
+        ? (page.module ? `<script type="module" src="/js/${page.script}.js"></script>` : `<script src="/js/${page.script}.js" defer></script>`)
+        : ''));
     for (const key of NAV_KEYS) {
       html = html.replace(new RegExp(`\\{\\{active_${key}\\}\\}`, 'g'), page.nav === key ? 'active' : '');
     }
@@ -132,6 +192,7 @@ const STATIC_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -169,10 +230,11 @@ function sendJson(res: http.ServerResponse, statusCode: number, data: any) {
 }
 
 // Helper to send HTML responses
-function sendHtml(res: http.ServerResponse, statusCode: number, html: string) {
+function sendHtml(res: http.ServerResponse, statusCode: number, html: string, permissions?: string) {
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
     ...getSecurityHttpHeaders(),
+    ...(permissions ? { 'Permissions-Policy': permissions } : {}),
   };
   res.writeHead(statusCode, headers);
   res.end(html);
@@ -194,11 +256,27 @@ function serveStaticFile(res: http.ServerResponse, filePath: string, contentType
   });
 }
 
+// clamd status for /api/health, cached so health checks do not hammer clamd.
+let clamdStatus = { checkedAt: 0, up: false };
+async function scannerHealth(): Promise<{ name: string; status: 'up' | 'down' | 'not-antivirus' }> {
+  if (!(scanner instanceof ClamdVirusScannerAdapter)) return { name: scanner.name, status: 'not-antivirus' };
+  if (Date.now() - clamdStatus.checkedAt > 30_000) clamdStatus = { checkedAt: Date.now(), up: await scanner.ping() };
+  return { name: scanner.name, status: clamdStatus.up ? 'up' : 'down' };
+}
+
 const server = http.createServer(async (req, res) => {
   const ip = getClientIp(req);
   const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = urlObj.pathname;
   const method = req.method || 'GET';
+  // Request id: the caller's X-Request-Id if well formed, else a new one; echoed back and in every log line.
+  const requestId = requestIdFrom(req.headers['x-request-id']);
+  res.setHeader('X-Request-Id', requestId);
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    // Path only (no query string); redaction removes emergency codes and tokens from it.
+    log(res.statusCode >= 500 ? 'error' : 'info', 'http_request', { requestId, method, path: pathname, status: res.statusCode, durationMs: Date.now() - startedAt });
+  });
 
   // 1. Rate Limiting Check
   const rateLimitStatus = rateLimiter.check(ip);
@@ -218,22 +296,61 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // Static assets (css, js, svg) from /site, with path traversal protection
-    if (method === 'GET' && /^\/(css|js|assets)\/[A-Za-z0-9._-]+$/.test(pathname)) {
+    // Static assets from /site: one optional subfolder (e.g. /js/lib/), no dot-segments, known types only
+    if (method === 'GET' && /^\/(css|js|assets|vendor)\/(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(pathname)) {
       const ext = path.extname(pathname);
-      if (STATIC_TYPES[ext]) {
-        serveStaticFile(res, path.join(SITE_DIR, pathname), STATIC_TYPES[ext]);
+      const filePath = path.resolve(SITE_DIR, `.${pathname}`);
+      if (STATIC_TYPES[ext] && filePath.startsWith(SITE_DIR + path.sep)) {
+        serveStaticFile(res, filePath, STATIC_TYPES[ext]);
+        return;
+      }
+    }
+
+    // Scanner service worker (served from the root so it may control /s)
+    if (method === 'GET' && pathname === '/sw.js') {
+      fs.readFile(path.join(SITE_DIR, 'sw.js'), (err, content) => {
+        if (err) { sendJson(res, 404, { error: 'Route not found', path: pathname }); return; }
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', ...getSecurityHttpHeaders() });
+        res.end(content);
+      });
+      return;
+    }
+
+    // Offline card scanner: embeds the current public keys and its strings so it works offline after one visit.
+    // The card token stays in the URL fragment and is never sent here.
+    if (method === 'GET' && (pathname === '/s' || pathname === '/s/')) {
+      const html = renderPage(SCAN_PAGE, {
+        jwksJson: jsonForScriptTag({ keys: getPublicJwks(), generatedAt: Date.now() }),
+        scanI18nJson: jsonForScriptTag(scannerStrings()),
+      });
+      if (html) {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          ...getSecurityHttpHeaders(),
+          'Permissions-Policy': 'camera=(self), microphone=(), geolocation=(), payment=()',
+          'Cache-Control': 'no-cache',
+        });
+        res.end(html);
         return;
       }
     }
 
     // Site pages
     if (method === 'GET' && PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]) {
-      const html = renderPage(PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname]);
+      const page = PAGES[pathname.length > 1 ? pathname.replace(/\/$/, '') : pathname];
+      const html = renderPage(page);
       if (html) {
-        sendHtml(res, 200, html);
+        sendHtml(res, 200, html, page.permissions);
         return;
       }
+    }
+
+    // Public keys for verifying offline emergency cards (current key first, then previous keys kept for rotation).
+    // Never contains private key material.
+    if (method === 'GET' && pathname === '/.well-known/medistry-keys.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json', ...getSecurityHttpHeaders(), 'Cache-Control': 'public, max-age=3600' });
+      res.end(JSON.stringify({ keys: getPublicJwks() }));
+      return;
     }
 
     // Demo shortcut: the priority patient's emergency gate (code is generated at startup)
@@ -249,29 +366,46 @@ const server = http.createServer(async (req, res) => {
 
     // Health Check
     if (method === 'GET' && pathname === '/api/health') {
+      // Operational status only: no personal or health data.
+      const storage = persistence.stats();
+      const malwareScanner = await scannerHealth();
+      const degraded = storage.failedWrites > 0 || malwareScanner.status === 'down';
       sendJson(res, 200, {
-        status: 'HEALTHY',
+        status: degraded ? 'DEGRADED' : 'HEALTHY',
+        version: VERSION,
+        uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
+        demoMode: DEMO_MODE,
+        region: deploymentRegion() || 'not set',
+        malwareScanner,
         platform: 'MEDISTRY Regional Health Record Portability Platform',
-        countryCode: 'NG',
-        regulator: 'Medical and Dental Council of Nigeria (MDCN)',
+        countryCode: deploymentCountry(),
+        regulator: (() => { try { return registryFor(deploymentCountry()).regulatorName; } catch { return 'Not configured for this country'; } })(),
         compliance: 'Nigeria Data Protection Act (NDPA 2023)',
         timestamp: new Date().toISOString(),
         activePatients: seedData.patients.length,
         accreditedFacilities: seedData.facilities.length,
         verifiedClinicians: seedData.clinicians.length,
+        storage: { ...storage, status: storage.failedWrites > 0 ? 'degraded' : 'ok' },
       });
       return;
     }
 
     // API: Facilities
     if (method === 'GET' && pathname === '/api/facilities') {
-      sendJson(res, 200, { facilities: seedData.facilities });
+      // Verified facilities only: self-registered ones appear once a platform admin verifies them.
+      sendJson(res, 200, { facilities: seedData.facilities.filter((f) => (f.status || 'VERIFIED') === 'VERIFIED') });
       return;
     }
 
     // API: Clinicians
     if (method === 'GET' && pathname === '/api/clinicians') {
-      sendJson(res, 200, { clinicians: seedData.clinicians });
+      // Verified clinicians only, public fields only (no review notes, registration or licence-expiry details).
+      sendJson(res, 200, {
+        clinicians: seedData.clinicians.filter((c) => c.status === 'VERIFIED').map((c) => ({
+          id: c.id, userId: c.userId, fullName: c.fullName, licenseNumber: c.licenseNumber, countryCode: c.countryCode,
+          specialty: c.specialty, facilityId: c.facilityId, status: c.status,
+        })),
+      });
       return;
     }
 
@@ -346,10 +480,11 @@ const server = http.createServer(async (req, res) => {
 
       try {
         const summaryData = emergencyEngine.buildEmergencySummary(patient, grantId);
+        emergencyEngine.recordSummaryView(grant.id, viewer.userId, viewer.facilityId);
         const html = renderEmergencySummaryHtml(summaryData);
         sendHtml(res, 200, html);
       } catch (err: any) {
-        sendHtml(res, 400, `<h1>Error generating emergency summary: ${err.message}</h1>`);
+        sendHtml(res, 400, `<h1>Error generating emergency summary: ${escapeHtml(err?.message || 'unknown error')}</h1>`);
       }
       return;
     }
@@ -364,30 +499,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const card = offlineCardManager.exportOfflineEmergencyCard(patient, patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2', 30);
-      sendHtml(
-        res,
-        200,
-        `<!DOCTYPE html>
-        <html>
-        <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>OFFLINE EMERGENCY CARD — MEDISTRY</title>
-          <style>
-            body { font-family: -apple-system, sans-serif; background: #f1f5f9; padding: 24px; display: flex; flex-direction: column; align-items: center; }
-            .info { max-width: 400px; margin-top: 16px; font-size: 13px; color: #475569; text-align: center; }
-            .btn-print { margin-top: 16px; padding: 10px 20px; background: #0f172a; color: #fff; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
-          </style>
-        </head>
-        <body>
-          ${card.printableCardHtml}
-          <div class="info">
-            Cryptographically signed by Regional Health Authority. Ambulance first responders can scan and verify signature offline.
-          </div>
-          <button class="btn-print" onclick="window.print()">🖨️ Print Emergency Card</button>
-        </body>
-        </html>`
-      );
+      // Same card as the patient portal: the current valid card, or the first one if none exists.
+      try {
+        const card = await handlePortalApi.offlineCardFor(patient, req, false, urlObj.searchParams.get('lang'));
+        sendHtml(res, 200, card.cardHtml);
+      } catch (err: any) {
+        sendHtml(res, err?.status || 500, `<h1>${escapeHtml(err?.message || 'Card unavailable')}</h1><p><a href="/patients">Open the patient portal</a> to reissue your card.</p>`);
+      }
       return;
     }
 
@@ -402,9 +520,10 @@ const server = http.createServer(async (req, res) => {
       }
       const demo = decryptPatientDemographics(patient);
       const svg = generateWalletCardSvg(
-        patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
+        codeByPatient.get(patient.id)?.formattedCode || patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
         `${demo.firstName} ${demo.lastName}`,
-        patient.emergencyContacts[0]?.phone
+        patient.emergencyContacts[0]?.phone,
+        { ...DEFAULT_CONFIG, baseUrl: appBaseUrl(req) }
       );
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', ...getSecurityHttpHeaders() });
       res.end(svg);
@@ -420,7 +539,10 @@ const server = http.createServer(async (req, res) => {
         sendHtml(res, 404, '<h1>Patient not found</h1>');
         return;
       }
-      const svg = generateWristbandSvg(patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2');
+      const svg = generateWristbandSvg(
+        codeByPatient.get(patient.id)?.formattedCode || patient.activeEmergencyCodeId || 'K7QM-4T9X-2HDP-8W2',
+        { ...DEFAULT_CONFIG, baseUrl: appBaseUrl(req) }
+      );
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', ...getSecurityHttpHeaders() });
       res.end(svg);
       return;
@@ -436,18 +558,29 @@ const server = http.createServer(async (req, res) => {
     }
     sendJson(res, 404, { error: 'Route not found', path: pathname });
   } catch (err: any) {
-    console.error('Unhandled Server Error:', err);
-    sendJson(res, 500, { error: 'Internal Server Error', message: err.message });
+    log('error', 'unhandled_error', { requestId, path: pathname, error: String(err?.message || err).slice(0, 300) });
+    sendJson(res, 500, { error: 'Internal Server Error', requestId });
   }
 });
 
+// Write-through storage: finish queued writes before the process exits.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => {
+    server.close();
+    persistence.close().catch(() => {}).finally(() => process.exit(0));
+  });
+}
+
 server.listen(PORT, '0.0.0.0', () => {
+  log('info', 'listening', { port: PORT });
+  // The banner (with a demo emergency link) is for the synthetic demo only: never print a real patient's code.
+  if (!DEMO_MODE) return;
   console.log(`\n======================================================`);
   console.log(`🛡️  MEDISTRY FULL-STACK PLATFORM RUNNING LOCALLY`);
   console.log(`🌐  Local URL:        http://localhost:${PORT}`);
   console.log(`🏥  Health Check:     http://localhost:${PORT}/api/health`);
   console.log(`👥  Patients List:    http://localhost:${PORT}/api/patients`);
   console.log(`🚨  Emergency Demo:   http://localhost:${PORT}/e/${seedData.patients[0].emergencyCode.formattedCode}`);
-  console.log(`🫀  Priority Patient: Amara Okonkwo (HbSS Sickle Cell, Penicillin Allergy)`);
+  console.log(`🫀  Priority synthetic patient: open the Emergency Demo link (no patient details are logged)`);
   console.log(`======================================================\n`);
 });

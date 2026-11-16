@@ -5,11 +5,21 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-strip-types src/server.ts",
+    "postinstall": "prisma generate",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/server.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "seed": "node --experimental-strip-types prisma/seed.ts"
+    "seed": "node --env-file-if-exists=.env --experimental-strip-types scripts/seed.ts",
+    "db:migrate": "prisma migrate deploy",
+    "db:generate": "prisma generate"
   },
   "keywords": [],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  }
 }

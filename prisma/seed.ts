@@ -29,6 +29,14 @@ export interface SeedFacility {
   countryCode: string;
   type: string;
   address: string;
+  // Kenya Master Facility List (KMFL) code or Nigeria Health Facility Registry (HFR) code.
+  // Real codes are not used in this demo: Nigerian ones are unknown (null); Kenyan ones are marked DEMO-.
+  registryCode: string | null;
+  synthetic?: boolean;
+  // Phase 17: what the facility is. Absent = HOSPITAL. LAB submits results; PHARMACY reads medications and dispenses.
+  kind?: 'HOSPITAL' | 'CLINIC' | 'LAB' | 'PHARMACY';
+  // Phase 18: self-registered facilities start PENDING until a platform admin verifies them. Absent = VERIFIED.
+  status?: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
 }
 
 export interface SeedClinician {
@@ -36,9 +44,29 @@ export interface SeedClinician {
   userId: string;
   fullName: string;
   licenseNumber: string;
+  countryCode: string; // licensing country (see src/lib/clinician/verification.ts)
   specialty: string;
   facilityId: string;
-  status: 'VERIFIED';
+  status: 'PENDING' | 'VERIFIED' | 'REJECTED' | 'SUSPENDED';
+  // Self-registration (Phase 12). Absent for seeded clinicians.
+  licenceExpiresOn?: string;       // YYYY-MM-DD, if the clinician gave one
+  licenceReminderSentFor?: string; // the expiry date a re-verification reminder was last sent for
+  registeredAt?: string;
+  registryMatch?: boolean;         // found in the registry adapter's list at registration
+  reviewedBy?: string;             // admin user id
+  reviewedAt?: string;
+  rejectionReason?: string;
+}
+
+/** A synthetic past visit, written to the clinical store as a doctor-signed FHIR Encounter. */
+export interface SeedEncounter {
+  daysAgo: number;
+  facilityId: string;
+  classCode: 'EMER' | 'AMB' | 'IMP';
+  reason: string;
+  diagnosis: string;
+  treatment: string;
+  result: string;
 }
 
 export interface SeedDatabasePayload {
@@ -47,11 +75,12 @@ export interface SeedDatabasePayload {
   patients: Array<{
     patient: PatientEntity;
     emergencyCode: { rawCode: string; formattedCode: string; scanUrl: string };
+    encounters: SeedEncounter[]; // synthetic; seeded into the clinical store by src/lib/site/seedClinical.ts
   }>;
 }
 
 export function generateSeedData(): SeedDatabasePayload {
-  // 1. Three Accredited Nigerian Facilities
+  // 1. Three Nigerian facilities, then two synthetic Kenyan facilities
   const facilities: SeedFacility[] = [
     {
       id: 'fac-luth-001',
@@ -60,6 +89,7 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'Tertiary Academic Medical Center',
       address: 'Idi-Araba, Surulere, Lagos, Nigeria',
+      registryCode: null,
     },
     {
       id: 'fac-abuja-001',
@@ -68,6 +98,7 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'National Referral Hospital',
       address: 'Plot 132 Central District, Abuja, Nigeria',
+      registryCode: null,
     },
     {
       id: 'fac-kano-001',
@@ -76,10 +107,32 @@ export function generateSeedData(): SeedDatabasePayload {
       countryCode: 'NG',
       type: 'Tertiary Teaching Hospital',
       address: 'Zaria Road, Kano, Nigeria',
+      registryCode: null,
+    },
+    // Two SYNTHETIC Kenyan facilities for the KMPDC demo. Not real facilities; DEMO- registry codes are not KMFL codes.
+    {
+      id: 'fac-ke-demo-001',
+      name: 'Synthetic Demo Hospital Nairobi (not a real facility)',
+      region: 'Nairobi',
+      countryCode: 'KE',
+      type: 'Synthetic demo hospital',
+      address: 'Nairobi, Kenya (synthetic)',
+      registryCode: 'DEMO-KMFL-0001',
+      synthetic: true,
+    },
+    {
+      id: 'fac-ke-demo-002',
+      name: 'Synthetic Demo Clinic Nairobi (not a real facility)',
+      region: 'Nairobi',
+      countryCode: 'KE',
+      type: 'Synthetic demo clinic',
+      address: 'Nairobi, Kenya (synthetic)',
+      registryCode: 'DEMO-KMFL-0002',
+      synthetic: true,
     },
   ];
 
-  // 2. Six Verified MDCN Clinicians
+  // 2. Six synthetic Nigerian (MDCN) clinicians, then three synthetic Kenyan (KMPDC demo) clinicians
   const clinicians: SeedClinician[] = [
     {
       id: 'clinician-doc-1',
@@ -135,7 +188,35 @@ export function generateSeedData(): SeedDatabasePayload {
       facilityId: 'fac-kano-001',
       status: 'VERIFIED',
     },
-  ];
+    // Three SYNTHETIC Kenyan clinicians (manual KMPDC demo list). 'DEMO-' licences are not real KMPDC numbers.
+    {
+      id: 'clinician-ke-demo-1',
+      userId: 'user-ke-demo-1',
+      fullName: 'Dr. Synthetic Wanjiku (demo)',
+      licenseNumber: 'DEMO-KE-1001',
+      specialty: 'Emergency Medicine',
+      facilityId: 'fac-ke-demo-001',
+      status: 'VERIFIED',
+    },
+    {
+      id: 'clinician-ke-demo-2',
+      userId: 'user-ke-demo-2',
+      fullName: 'Dr. Synthetic Otieno (demo)',
+      licenseNumber: 'DEMO-KE-1002',
+      specialty: 'Internal Medicine',
+      facilityId: 'fac-ke-demo-001',
+      status: 'VERIFIED',
+    },
+    {
+      id: 'clinician-ke-demo-3',
+      userId: 'user-ke-demo-3',
+      fullName: 'Dr. Synthetic Mwangi (demo)',
+      licenseNumber: 'DEMO-KE-1003',
+      specialty: 'Paediatrics',
+      facilityId: 'fac-ke-demo-002',
+      status: 'VERIFIED',
+    },
+  ].map((c) => ({ ...c, countryCode: c.licenseNumber.startsWith('MDCN/') ? 'NG' : 'KE' }));
 
   // 3. Ten Rich Multi-Facility Synthetic Patients
   const rawPatients = [
@@ -163,6 +244,12 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      // Offline card opt-ins (synthetic): the condition and one medication, no recent diagnosis
+      card: { conditions: ['Sickle Cell Anemia (HbSS)'], medicationNames: ['Hydroxyurea'], includeRecentDiagnosis: false },
+      encounters: [
+        { daysAgo: 45, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Severe bone pain in limbs and back', diagnosis: 'Vaso-occlusive crisis', treatment: 'IV fluids and analgesia', result: 'Discharged home after 3 days' },
+        { daysAgo: 210, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Routine haematology review', diagnosis: 'Sickle cell anaemia (HbSS), stable', treatment: 'Hydroxyurea continued', result: 'Follow-up in 6 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -187,6 +274,10 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 30, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Wheeze and breathlessness', diagnosis: 'Acute asthma exacerbation', treatment: 'Nebulised bronchodilator and oral steroid', result: 'Discharged home' },
+        { daysAgo: 180, facilityId: 'fac-luth-001', classCode: 'AMB', reason: 'Asthma review', diagnosis: 'Severe persistent asthma', treatment: 'Inhaler technique reviewed', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -210,6 +301,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: true,
       },
+      encounters: [
+        { daysAgo: 60, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Blood pressure check', diagnosis: 'Essential hypertension, controlled', treatment: 'Amlodipine continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
@@ -233,15 +327,21 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 20, facilityId: 'fac-abuja-001', classCode: 'EMER', reason: 'Sweating and confusion', diagnosis: 'Hypoglycaemia', treatment: 'Oral and IV glucose; glimepiride dose reviewed', result: 'Discharged home' },
+        { daysAgo: 150, facilityId: 'fac-abuja-001', classCode: 'AMB', reason: 'Diabetes review', diagnosis: 'Type 2 diabetes mellitus', treatment: 'Metformin continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
-      // Patient 5: Young adult, healthy baseline
+      // Patient 5: Young adult, healthy baseline. One allergy she reported herself at onboarding (synthetic).
       demo: { firstName: 'Fatima', lastName: 'Garba', dateOfBirth: '2001-02-14', gender: 'female' as const },
       triage: {
         bloodGroup: 'O_POSITIVE' as const,
         genotype: 'AA' as const,
-        allergies: [],
+        allergies: [
+          { substance: 'Sulfonamide antibiotics', category: 'drug' as const, reaction: 'Facial swelling', severity: 'severe' as const, source: 'patient-reported' as const },
+        ],
         chronicConditions: [],
         activeMedications: [],
         emergencyContacts: [
@@ -251,6 +351,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 90, facilityId: 'fac-kano-001', classCode: 'AMB', reason: 'Fever and headache', diagnosis: 'Uncomplicated malaria', treatment: 'Oral antimalarial', result: 'Recovered' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -273,6 +376,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 75, facilityId: 'fac-luth-001', classCode: 'AMB', reason: 'Kidney function review', diagnosis: 'Chronic kidney disease stage 2', treatment: 'Dietary advice; allopurinol continued', result: 'Follow-up in 6 months' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
     {
@@ -295,6 +401,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: true,
       },
+      encounters: [
+        { daysAgo: 50, facilityId: 'fac-kano-001', classCode: 'EMER', reason: 'Witnessed seizure at home', diagnosis: 'Breakthrough seizure', treatment: 'Observation; levetiracetam adherence reviewed', result: 'Discharged home' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -317,6 +426,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: true,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 40, facilityId: 'fac-abuja-001', classCode: 'EMER', reason: 'Upper abdominal pain', diagnosis: 'Peptic ulcer disease flare', treatment: 'Proton pump inhibitor', result: 'Discharged home' },
+      ],
       originFacilityId: 'fac-abuja-001',
     },
     {
@@ -341,6 +453,16 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      // Offline card opt-ins (synthetic): both conditions, two medications and the recent diagnosis
+      card: {
+        conditions: ['Congestive Heart Failure (NYHA Class III)', 'Atrial Fibrillation'],
+        medicationNames: ['Furosemide', 'Digoxin'],
+        includeRecentDiagnosis: true,
+      },
+      encounters: [
+        { daysAgo: 25, facilityId: 'fac-kano-001', classCode: 'IMP', reason: 'Breathlessness and leg swelling', diagnosis: 'Acute decompensated heart failure', treatment: 'IV diuretics', result: 'Discharged after 5 days' },
+        { daysAgo: 120, facilityId: 'fac-kano-001', classCode: 'AMB', reason: 'Cardiology review', diagnosis: 'Atrial fibrillation, rate controlled', treatment: 'Digoxin continued', result: 'Follow-up in 3 months' },
+      ],
       originFacilityId: 'fac-kano-001',
     },
     {
@@ -364,6 +486,9 @@ export function generateSeedData(): SeedDatabasePayload {
         organDonor: false,
         publicEmergencyOptIn: false,
       },
+      encounters: [
+        { daysAgo: 15, facilityId: 'fac-luth-001', classCode: 'EMER', reason: 'Fever', diagnosis: 'Febrile illness in sickle cell disease', treatment: 'Blood cultures and IV antibiotics', result: 'Admitted for observation' },
+      ],
       originFacilityId: 'fac-luth-001',
     },
   ];
@@ -383,9 +508,20 @@ export function generateSeedData(): SeedDatabasePayload {
     const emergencyCode = generatePatientUniqueCode('medistry.health', seedBytes(`emergency-code-${index}`));
     patientEntity.activeEmergencyCodeId = emergencyCode.rawCode;
 
+    // Card opt-ins select existing items only (medications by their generated ids)
+    const card = (p as { card?: { conditions: string[]; medicationNames: string[]; includeRecentDiagnosis: boolean } }).card;
+    if (card) {
+      patientEntity.cardConditions = card.conditions.filter((c) => patientEntity.chronicConditions.includes(c));
+      patientEntity.cardMedicationIds = patientEntity.activeMedications
+        .filter((m) => card.medicationNames.includes(m.medicationName))
+        .map((m) => m.id);
+      patientEntity.cardIncludeRecentDiagnosis = card.includeRecentDiagnosis;
+    }
+
     return {
       patient: patientEntity,
       emergencyCode,
+      encounters: p.encounters as SeedEncounter[],
     };
   });
 
@@ -396,13 +532,4 @@ export function generateSeedData(): SeedDatabasePayload {
   };
 }
 
-// When executed directly in node / ts-node
-if (process.argv[1]?.endsWith('seed.ts')) {
-  const seedData = generateSeedData();
-  console.log(`✅ Generated MEDISTRY Synthetic Database:`);
-  console.log(`   • Facilities: ${seedData.facilities.length}`);
-  console.log(`   • Clinicians: ${seedData.clinicians.length}`);
-  console.log(`   • Synthetic Patients: ${seedData.patients.length}`);
-  console.log(`   • Priority Patient: ${seedData.patients[0].patient.id} (Sickle Cell SS, Penicillin Anaphylaxis)`);
-}
-
+// The `npm run seed` command lives in scripts/seed.ts (it imports the runtime, which imports this module).

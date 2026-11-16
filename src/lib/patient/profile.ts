@@ -4,17 +4,11 @@
  */
 
 import crypto from 'node:crypto';
-import { appSecret } from '../security/config.ts';
+import { deploymentCountry } from '../security/config.ts';
+import { keyProvider, type KeyProvider } from '../crypto/keyProvider.ts';
 
-// Key comes from FIELD_ENCRYPTION_KEY (64 hex chars). If unset or a published default, a random per-process key is used.
-function getEncryptionKey(): Buffer {
-  const envKey = appSecret('FIELD_ENCRYPTION_KEY', { hex: true });
-  const keyBuf = Buffer.from(envKey, 'hex');
-  if (keyBuf.length !== 32) {
-    throw new Error('FIELD_ENCRYPTION_KEY must be a 32-byte hexadecimal string (64 chars)');
-  }
-  return keyBuf;
-}
+// Keys come from the KeyProvider (crypto/keyProvider.ts): FIELD_ENCRYPTION_KEY (64 hex chars) is the current
+// version; earlier versions stay readable for rotation. If unset or a published default, a random per-process key.
 
 export interface EncryptedCiphertext {
   iv: string;         // 12 bytes hex
@@ -22,11 +16,17 @@ export interface EncryptedCiphertext {
   ciphertext: string; // Hex payload
 }
 
+/** Key version of a ciphertext: "v<n>:" prefix, or 1 for ciphertexts written before versioning. */
+export function fieldKeyVersionOf(encryptedPayload: string): number {
+  const m = /^v(\d{1,4}):/.exec(encryptedPayload);
+  return m ? Number(m[1]) : 1;
+}
+
 /**
- * Encrypts a plaintext string using AES-256-GCM with authenticated tag.
+ * Encrypts a plaintext string using AES-256-GCM with authenticated tag, under the current key version.
  */
-export function encryptField(plaintext: string): string {
-  const key = getEncryptionKey();
+export function encryptField(plaintext: string, provider: KeyProvider = keyProvider()): string {
+  const { version, key } = provider.getFieldEncryptionKey();
   const iv = crypto.randomBytes(12); // Recommended 96-bit IV for GCM
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
 
@@ -34,21 +34,22 @@ export function encryptField(plaintext: string): string {
   encrypted += cipher.final('hex');
   const tag = cipher.getAuthTag().toString('hex');
 
-  // Format: iv:tag:ciphertext
-  return `${iv.toString('hex')}:${tag}:${encrypted}`;
+  // Format: v<version>:iv:tag:ciphertext
+  return `v${version}:${iv.toString('hex')}:${tag}:${encrypted}`;
 }
 
 /**
  * Decrypts an AES-256-GCM ciphertext payload and validates integrity tag.
  */
-export function decryptField(encryptedPayload: string): string {
-  const parts = encryptedPayload.split(':');
+export function decryptField(encryptedPayload: string, provider: KeyProvider = keyProvider()): string {
+  const version = fieldKeyVersionOf(encryptedPayload);
+  const parts = encryptedPayload.replace(/^v\d{1,4}:/, '').split(':');
   if (parts.length !== 3) {
-    throw new Error('Invalid encrypted payload format: expected iv:tag:ciphertext');
+    throw new Error('Invalid encrypted payload format: expected [v<n>:]iv:tag:ciphertext');
   }
 
   const [ivHex, tagHex, ciphertextHex] = parts;
-  const key = getEncryptionKey();
+  const { key } = provider.getFieldEncryptionKey(version);
   const iv = Buffer.from(ivHex, 'hex');
   const tag = Buffer.from(tagHex, 'hex');
 
@@ -59,6 +60,12 @@ export function decryptField(encryptedPayload: string): string {
   decrypted += decipher.final('utf8');
 
   return decrypted;
+}
+
+/** Re-encrypts a ciphertext under the current key version (unchanged if it already uses it). For key rotation. */
+export function reencryptField(encryptedPayload: string, provider: KeyProvider = keyProvider()): string {
+  if (fieldKeyVersionOf(encryptedPayload) === provider.getFieldEncryptionKey().version && /^v\d/.test(encryptedPayload)) return encryptedPayload;
+  return encryptField(decryptField(encryptedPayload, provider), provider);
 }
 
 export type BloodGroup = 'A_POSITIVE' | 'A_NEGATIVE' | 'B_POSITIVE' | 'B_NEGATIVE' | 'AB_POSITIVE' | 'AB_NEGATIVE' | 'O_POSITIVE' | 'O_NEGATIVE' | 'UNKNOWN';
@@ -78,9 +85,12 @@ export interface PatientAllergy {
   category: 'drug' | 'food' | 'environment';
   reaction: string;
   severity: 'severe' | 'moderate' | 'mild';
+  // 'patient-reported': stated by the patient (e.g. at onboarding), not verified by a clinician
+  source?: 'clinician' | 'patient-reported';
 }
 
 export interface ActiveMedication {
+  id: string;         // Stable per-patient id; patients pick medications for their offline card by id
   medicationName: string;
   dose: string;
   route: string;
@@ -101,6 +111,8 @@ export interface PatientEntity {
   userId: string;
   countryCode: string;
   primaryFacilityId?: string;
+  // Set when a reviewer merged this record into another (Phase 16). Nothing else changes; unmerge removes it.
+  mergedIntoPatientId?: string;
 
   // Encrypted demographic fields
   encryptedFirstName: string;
@@ -122,10 +134,36 @@ export interface PatientEntity {
   allergies: PatientAllergy[];
   chronicConditions: string[];
   activeMedications: ActiveMedication[];
-  
+
+  // Offline emergency card visibility (patient-chosen). These only select which existing items are
+  // shown on the card; they never create or change clinical content.
+  cardConditions: string[];          // subset of chronicConditions
+  cardMedicationIds: string[];       // subset of activeMedications[].id
+  cardIncludeRecentDiagnosis: boolean;
+  cardVersion: number;               // version of the latest issued card (0 = none issued)
+  cardStale: boolean;                // a signed record changed card content since the card was issued
+  preferredLocale?: string;          // language for the printed card and notifications (i18n locale); English if unset
+
   activeEmergencyCodeId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Gives each medication a stable id (deterministic from its fields, so seeded ids survive restarts).
+ */
+function withMedicationIds(meds: Array<Omit<ActiveMedication, 'id'> & { id?: string }>): ActiveMedication[] {
+  const used = new Set<string>();
+  return meds.map((m) => {
+    let id = m.id;
+    if (!id) {
+      const base = crypto.createHash('sha256').update(`${m.medicationName}|${m.dose}|${m.route}|${m.sinceDate}`).digest('hex').slice(0, 12);
+      id = `med-${base}`;
+      for (let n = 2; used.has(id); n++) id = `med-${base}-${n}`;
+    }
+    used.add(id);
+    return { ...m, id };
+  });
 }
 
 /**
@@ -142,7 +180,10 @@ export function createPatientRecord(
     emergencyContacts?: EmergencyContact[];
     allergies?: PatientAllergy[];
     chronicConditions?: string[];
-    activeMedications?: ActiveMedication[];
+    activeMedications?: Array<Omit<ActiveMedication, 'id'> & { id?: string }>;
+    cardConditions?: string[];
+    cardMedicationIds?: string[];
+    cardIncludeRecentDiagnosis?: boolean;
   },
   meta: { userId: string; countryCode?: string; primaryFacilityId?: string; id?: string }
 ): PatientEntity {
@@ -151,7 +192,7 @@ export function createPatientRecord(
   return {
     id: meta.id || crypto.randomUUID(),
     userId: meta.userId,
-    countryCode: meta.countryCode || 'NG',
+    countryCode: meta.countryCode || deploymentCountry(),
     primaryFacilityId: meta.primaryFacilityId,
 
     // Encrypt demographics
@@ -172,7 +213,12 @@ export function createPatientRecord(
     emergencyContacts: triageData.emergencyContacts || [],
     allergies: triageData.allergies || [],
     chronicConditions: triageData.chronicConditions || [],
-    activeMedications: triageData.activeMedications || [],
+    activeMedications: withMedicationIds(triageData.activeMedications || []),
+    cardConditions: triageData.cardConditions || [],
+    cardMedicationIds: triageData.cardMedicationIds || [],
+    cardIncludeRecentDiagnosis: triageData.cardIncludeRecentDiagnosis || false,
+    cardVersion: 0,
+    cardStale: false,
 
     createdAt: now,
     updatedAt: now,

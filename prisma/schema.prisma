@@ -1,3 +1,10 @@
+// MEDISTRY database schema (PostgreSQL). Mirrors the in-memory entities used at runtime.
+// Runtime model (src/lib/data): the in-memory engines are the synchronous working set; with STORAGE=postgres
+// every change is written through to these tables and the working set is rebuilt from them at start-up.
+//
+// Encryption at rest: values marked "AES-256-GCM" are encrypted in the application with FIELD_ENCRYPTION_KEY
+// (iv:tag:ciphertext) before they reach the database. Never add plaintext copies of them.
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -10,8 +17,12 @@ generator client {
 enum UserRole {
   PATIENT
   DOCTOR
+  NURSE           // drafts only; a doctor signs
+  RECORDS_OFFICER // drafts only; a doctor signs
   FACILITY_ADMIN
   PLATFORM_ADMIN
+  PROXY           // portal user without their own linked record: acts only as a proxy (parent, caregiver...)
+  PHARMACIST      // staff of a PHARMACY facility: active medications and dispensing only, under consent (Phase 17)
 }
 
 enum VerificationStatus {
@@ -33,6 +44,44 @@ enum BreakGlassReason {
   LIFE_THREATENING
   PATIENT_UNABLE_TO_CONSENT
   OTHER
+}
+
+enum RecordStatus {
+  DRAFT     // created by a nurse or records officer, imported without a verified author, or proposed by AI intake; invisible until a doctor signs
+  FINAL     // signed by a verified doctor
+  DISCARDED // a draft the reviewing doctor rejected (kept, never shown, never signable)
+}
+
+enum RecordSource {
+  CLINICIAN
+  PATIENT_REPORTED // stated by the patient; shown as "Patient-reported, not clinician-verified"
+  EMR_IMPORT       // pushed by a facility system (FHIR import, Phase 15)
+  AI_DRAFT         // proposed by the AI intake agent; final only after a doctor signs
+  PHARMACY         // a dispensing record written by a pharmacy (Phase 17)
+}
+
+enum RecordFlagStatus {
+  OPEN
+  RESOLVED
+}
+
+enum OfflineScanStatus {
+  ACCEPTED
+  DISPUTED
+}
+
+enum ConsentRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum DisputeStatus {
+  PENDING_REVIEW
+  UNDER_INVESTIGATION
+  RESOLVED_VALID
+  RESOLVED_BREACH
 }
 
 enum BloodGroup {
@@ -68,77 +117,124 @@ enum FHIRResourceType {
   AllergyIntolerance
   Immunization
   DocumentReference
+  MedicationDispense
 }
 
 model User {
-  id                String         @id @default(uuid())
-  email             String?        @unique
-  phone             String?        @unique
-  passwordHash      String         // Argon2id / secure scrypt hash
-  role              UserRole
-  twoFactorSecret   String?        // Encrypted TOTP secret
-  twoFactorEnabled  Boolean        @default(false)
-  countryCode       String         @default("NG") // ISO 3166-1 alpha-2
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  id               String    @id
+  email            String?   @unique // not used: emails are stored as emailHash + encryptedEmail
+  phone            String?   @unique // not used: phone numbers are stored as phoneHash + encryptedPhone
+  passwordHash     String?   // scrypt (N=2^15, r=8, p=1, 16-byte salt); clinicians and admins
+  role             UserRole
+  twoFactorSecret  String?   // AES-256-GCM encrypted TOTP secret (demo seed accounts derive theirs from JWT_SECRET)
+  twoFactorEnabled Boolean   @default(false) // true after the first sign-in with the enrolled authenticator
+  countryCode      String    @default("NG") // ISO 3166-1 alpha-2
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  patient           Patient?
-  clinician         Clinician?
-  facilityAdmin     FacilityAdmin?
-  auditLogs         AuditLog[]     @relation("ActorAuditLogs")
-  sessions          Session[]
+  // Sign-in (Phase 12). hasAccount marks rows that hold credentials (not just a placeholder for a seeded record).
+  hasAccount        Boolean   @default(false)
+  displayName       String?   // admins only
+  phoneHash         String?   @unique // HMAC-SHA256 lookup hash (FIELD_ENCRYPTION_KEY-derived)
+  encryptedPhone    String?   // AES-256-GCM
+  emailHash         String?   @unique
+  encryptedEmail    String?
+  failedSignIns     Int       @default(0)
+  lockedUntil       DateTime?
+  sessionsNotBefore DateTime? // sessions issued earlier are refused (sign out everywhere, account recovery)
+  lastSignInAt      DateTime?
+  staffFacilityId   String?   // RECORDS_OFFICER / PHARMACIST / NURSE: their facility (facility admins use FacilityAdmin)
+  disabled          Boolean   @default(false) // suspended by the facility admin (Phase 18)
+  // USSD (Phase 13): 4-digit PIN (scrypt hash); locked after 3 wrong PINs until the patient sets a new one in the app
+  ussdPinHash       String?
+  ussdPinFailures   Int       @default(0)
+  ussdLocked        Boolean   @default(false)
+
+  patient          Patient?
+  clinician        Clinician?
+  facilityAdmin    FacilityAdmin?
+  sessions         Session[]
+  proxyFor         ProxyRelationship[]
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash    String   @unique
-  ipAddress    String
-  userAgent    String
-  expiresAt    DateTime
-  createdAt    DateTime @default(now())
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  ipAddress String
+  userAgent String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 }
 
 model Facility {
-  id              String             @id @default(uuid())
+  id              String             @id
   name            String
-  registrationNo  String             @unique // State MOH / CAC
-  facilityType    String             // Hospital, Clinic, Diagnostic Centre
+  region          String
+  type            String             // Hospital, Clinic, Diagnostic Centre
   address         String
-  city            String
-  state           String
   countryCode     String             @default("NG")
-  phone           String
-  email           String
+  registryCode    String?            // Kenya Master Facility List (KMFL) or Nigeria Health Facility Registry (HFR) code
+  registrationNo  String?            @unique // State MOH / CAC (not collected yet)
+  phone           String?
+  email           String?
+  synthetic       Boolean            @default(false)
+  kind            String             @default("HOSPITAL") // HOSPITAL | CLINIC | LAB | PHARMACY (Phase 17)
   status          VerificationStatus @default(PENDING)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
-  clinicians      ClinicianFacility[]
+  clinicians      Clinician[]
+  clinicianLinks  ClinicianFacility[]
   admins          FacilityAdmin[]
+  apiClients      FacilityApiClient[]
   authoredRecords PatientRecord[]
   emergencyGrants EmergencyAccessGrant[]
   consentGrants   ConsentGrant[]
 }
 
 model Clinician {
-  id              String             @id @default(uuid())
+  id              String             @id
   userId          String             @unique
   user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   fullName        String
-  licenseNumber   String             @unique // MDCN Folio number
+  licenseNumber   String             @unique // licence number in the clinician's licensing country (MDCN folio for NG)
+  countryCode     String             @default("NG") // licensing country; rules in src/lib/clinician/verification.ts
   specialty       String
+  facilityId      String             // primary facility
+  facility        Facility           @relation(fields: [facilityId], references: [id])
   status          VerificationStatus @default(PENDING)
-  verifiedAt      DateTime?
-  verifiedBy      String?            // Admin ID
+  verifiedAt      DateTime?          // when an admin approved or rejected the registration
+  verifiedBy      String?            // Admin user ID (approval or rejection)
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
+  // Self-registration (Phase 12)
+  registeredAt             DateTime?
+  registryMatch            Boolean?  // found in the registry adapter's list when submitted
+  licenceExpiresOn         String?   // YYYY-MM-DD, if given; drives the re-verification reminder
+  licenceReminderSentFor   String?   // expiry date the last reminder was sent for
+  encryptedRejectionReason String?   // AES-256-GCM
+  licenceDocument          ClinicianLicenceDocument?
+
   facilities      ClinicianFacility[]
-  authoredRecords PatientRecord[]
   emergencyGrants EmergencyAccessGrant[] @relation("TreatingClinician")
   coSignedGrants  EmergencyAccessGrant[] @relation("CoSigningClinician")
+  deviceKeys      ClinicianDeviceKey[]
+  offlineScans    OfflineScanEvent[]
+}
+
+// Scanner device keys (public part only). The private key is non-extractable and never leaves the device.
+model ClinicianDeviceKey {
+  clinicianId String
+  clinician   Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  thumbprint  String    // RFC 7638 JWK thumbprint, bound into the clinician pass as dk
+  publicJwk   Json
+  boundAt     DateTime  @default(now())
+  revokedAt   DateTime? // TODO: device revocation is not implemented yet
+
+  @@id([clinicianId, thumbprint])
 }
 
 model ClinicianFacility {
@@ -163,167 +259,559 @@ model FacilityAdmin {
 }
 
 model Patient {
-  id                   String       @id @default(uuid())
-  userId               String       @unique
-  user                 User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+  id                   String     @id
+  userId               String     @unique
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   // Encrypted demographic fields (AES-256-GCM)
   encryptedFirstName   String
   encryptedLastName    String
-  encryptedDob         String       // ISO Date
-  gender               String       // male, female, other
-  encryptedNin         String?      // National Identification Number (encrypted)
+  encryptedDob         String     // ISO date
+  gender               String     // male, female, other
+  encryptedNin         String?    // National Identification Number
   photoUrl             String?
 
   // Critical Medical Triage (Emergency Core)
-  bloodGroup           BloodGroup   @default(UNKNOWN)
-  genotype             Genotype     @default(UNKNOWN)
-  advanceDirectiveDnr  Boolean      @default(false)
-  organDonor           Boolean      @default(false)
-  publicEmergencyOptIn Boolean      @default(false) // Opt-in to show blood group/allergies without login
+  bloodGroup           BloodGroup @default(UNKNOWN)
+  genotype             Genotype   @default(UNKNOWN)
+  advanceDirectiveDnr  Boolean    @default(false)
+  organDonor           Boolean    @default(false)
+  publicEmergencyOptIn Boolean    @default(false) // Opt-in to show blood group/allergies without login
 
-  countryCode          String       @default("NG")
+  // AES-256-GCM JSON: { emergencyContacts, allergies, chronicConditions, activeMedications, cardConditions }.
+  // The emergency-card projection of signed records plus the patient's card choices; contacts and condition
+  // names are personal and health data, so they are never stored as plaintext columns.
+  encryptedEmergencyProfile String
+
+  // Offline emergency card visibility (patient-chosen; selects existing items, never edits them)
+  cardMedicationIds          String[] @default([]) // ids of the patient's active medication entries
+  cardIncludeRecentDiagnosis Boolean  @default(false)
+  cardVersion                Int      @default(0)  // Version of the latest issued card (0 = none)
+  cardStale                  Boolean  @default(false) // A signed record changed card content since the card was issued
+  preferredLocale            String?  // i18n locale for the printed card and notifications; English if null
+
+  countryCode          String     @default("NG")
   primaryFacilityId    String?
-  createdAt            DateTime     @default(now())
-  updatedAt            DateTime     @updatedAt
+  mergedIntoPatientId  String?    // Phase 16: set while this record is merged into another; unmerge clears it
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
 
   emergencyCodes       EmergencyCode[]
-  emergencyContacts    EmergencyContact[]
   records              PatientRecord[]
   consentGrants        ConsentGrant[]
+  consentRequests      ConsentRequest[]
   emergencyGrants      EmergencyAccessGrant[]
-  auditLogs            AuditLog[]   @relation("SubjectAuditLogs")
+  offlineCards         OfflineCard[]
+  offlineScans         OfflineScanEvent[]
+  proxies              ProxyRelationship[]
+  facilityLinks        FacilityPatientLink[]
+  intakeSessions       IntakeSession[]
+  identifiers          PatientIdentifier[]
+}
+
+enum ProxyRelationshipKind {
+  parent
+  guardian
+  caregiver
+  spouse
+  other
+}
+
+enum ProxyStatus {
+  INVITED
+  ACTIVE
+  DECLINED
+  REVOKED
+  ENDED
+}
+
+// Guardian / proxy access (Phase 12). The proxy acts under their own identity; audit entries name both.
+model ProxyRelationship {
+  id                  String                @id
+  patientId           String
+  patient             Patient               @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  proxyUserId         String
+  proxyUser           User                  @relation(fields: [proxyUserId], references: [id], onDelete: Cascade)
+  relationship        ProxyRelationshipKind
+  scopes              String[]              // view | manage-card | approve-consent
+  validFrom           DateTime
+  validUntil          DateTime?             // a minor's guardian: the patient's 18th birthday
+  verifiedBy          String?               // admin who checked a guardian's authority in person
+  status              ProxyStatus
+  managesMinorAccount Boolean               @default(false)
+  createdAt           DateTime
+  endedAt             DateTime?
+  endReason           String?
+
+  @@index([patientId])
+  @@index([proxyUserId])
+}
+
+// A self-registered clinician's licence document: validated, malware-scanned and AES-256-GCM encrypted.
+model ClinicianLicenceDocument {
+  id                String    @id
+  clinicianId       String    @unique
+  clinician         Clinician @relation(fields: [clinicianId], references: [id], onDelete: Cascade)
+  encryptedFilename String
+  mimeType          String
+  sha256            String
+  sizeBytes         Int
+  encryptedPayload  String
+  uploadedAt        DateTime
+}
+
+// Signed offline emergency cards (ES256).
+model OfflineCard {
+  id                    String    @id
+  patientId             String
+  patient               Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  version               Int       // Matches the token's cv claim
+  kid                   String    // RFC 7638 thumbprint of the signing key
+  payloadHash           String    // SHA-256 hex of the signed token
+  encryptedCurrentToken String?   // AES-256-GCM; only for the current card, so it can be shown again; cleared when superseded
+  issuedAt              DateTime
+  expiresAt             DateTime
+  revokedAt             DateTime?
+  revocationReason      String?
+  supersededById        String?   // Id of the card that replaced this one
+
+  @@unique([patientId, version])
+  @@index([patientId, revokedAt])
+}
+
+// An offline card scan, uploaded later by the scanner. The id is the device-generated eventId (idempotent).
+// It records the clinician device's signed statement; it cannot prove a physical scan happened.
+model OfflineScanEvent {
+  id                  String            @id // eventId
+  patientId           String
+  patient             Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  cardVersion         Int
+  cardKid             String
+  clinicianId         String
+  clinician           Clinician         @relation(fields: [clinicianId], references: [id])
+  facilityId          String
+  clinicianCountry    String            // scanning clinician's licensing country (from the signed pass)
+  cardCountry         String            // the card's (patient's) country; scans may cross borders
+  reason              BreakGlassReason
+  encryptedDetails    String?           // AES-256-GCM free text for OTHER
+  scannedAt           DateTime          // device clock at scan time
+  receivedAt          DateTime
+  deviceKeyThumbprint String
+  deviceSig           String            // kept to tell a genuine re-upload from a reused eventId
+  auditLogId          String            // the OFFLINE_EMERGENCY_SCAN audit entry
+  status              OfflineScanStatus @default(ACCEPTED)
+
+  @@index([patientId, scannedAt])
+  @@index([clinicianId, scannedAt])
 }
 
 model EmergencyCode {
   id               String    @id @default(uuid())
   patientId        String
   patient          Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  codeHash         String    @unique // SHA256 of Crockford Base32 code for constant-time lookup
-  displayCode      String    // Masked representation (e.g. K7QM-****-****-8W)
+  codeHash         String    @unique // SHA-256 of the normalised Crockford Base32 code, for lookup
+  encryptedCode    String    // AES-256-GCM; so the patient can see and reprint their own code
+  displayCode      String    // Masked representation (e.g. K7QM-****-****-*W2)
   isActive         Boolean   @default(true)
   revokedAt        DateTime?
   revocationReason String?
   reissuedFromId   String?
   createdAt        DateTime  @default(now())
 
-  emergencyGrants  EmergencyAccessGrant[]
-}
-
-model EmergencyContact {
-  id           String   @id @default(uuid())
-  patientId    String
-  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  name         String
-  relationship String
-  phone        String
-  email        String?
-  priority     Int      @default(1)
-  createdAt    DateTime @default(now())
+  @@index([patientId, isActive])
 }
 
 model PatientRecord {
-  id                String           @id @default(uuid())
-  patientId         String
-  patient           Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  resourceType      FHIRResourceType
-  versionId         Int              @default(1)
-  isLatest          Boolean          @default(true)
-  previousVersionId String?
+  id                  String           @id
+  patientId           String
+  patient             Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  resourceType        FHIRResourceType
+  versionId           Int              @default(1)
+  isLatest            Boolean          @default(true)
+  previousVersionId   String?
 
-  // Origin & Federation
-  authorClinicianId String
-  authorClinician   Clinician        @relation(fields: [authorClinicianId], references: [id])
-  originFacilityId  String
-  originFacility    Facility         @relation(fields: [originFacilityId], references: [id])
-  countryCode       String           @default("NG")
+  // Drafts and provenance. Corrections are new versions (previousVersionId); nothing is deleted.
+  status              RecordStatus     @default(FINAL)
+  source              RecordSource     @default(CLINICIAN)
+  draftedByUserId     String?          // nurse or records officer who created the draft
+  signedByClinicianId String?          // doctor who signed (set for every FINAL version)
+  signedAt            DateTime?
+  externalKey         String?          // imports: SHA-256 of facility|type|identifier, for idempotent re-imports
+  orderingClinicianId String?          // lab results: the clinician who ordered the test (Phase 17)
+  flags               RecordFlag[]
+
+  // Author: a clinician id, or a staff user id for drafts (so no foreign key).
+  authorClinicianId   String
+  originFacilityId    String
+  originFacility      Facility         @relation(fields: [originFacilityId], references: [id])
+  countryCode         String           @default("NG")
 
   // FHIR R4 Encrypted Payload & Indices
-  clinicalCategory  String?          // e.g., 'vital-signs', 'laboratory', 'drug-allergy'
-  effectiveDate     DateTime         @default(now())
-  encryptedPayload  String           // AES-256-GCM encrypted JSON payload
-  payloadSignature  String           // Clinician digital signature/hash
+  clinicalCategory    String?          // e.g. 'vital-signs', 'laboratory'
+  effectiveDate       String           // ISO date or date-time exactly as recorded
+  encryptedPayload    String           // AES-256-GCM encrypted FHIR JSON
+  payloadSignature    String           // SHA-256 of the FHIR JSON
 
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  createdAt           DateTime
+  updatedAt           DateTime
 
   @@index([patientId, resourceType, isLatest])
-  @@index([patientId, effectiveDate])
+  @@index([patientId, status])
+  @@index([externalKey])
+}
+
+// A patient's note that a record may be wrong. It never changes the record; the signing clinician is notified.
+model RecordFlag {
+  id                String           @id
+  recordId          String
+  record            PatientRecord    @relation(fields: [recordId], references: [id])
+  patientId         String
+  resourceType      String
+  encryptedNote     String           // AES-256-GCM
+  authorClinicianId String           // clinician who signed the flagged version
+  status            RecordFlagStatus @default(OPEN)
+  createdAt         DateTime
+
+  @@index([patientId, createdAt])
+  @@index([authorClinicianId, status])
+}
+
+model ConsentRequest {
+  id                       String               @id
+  patientId                String
+  patient                  Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  requestingClinicianId    String
+  requestingClinicianName  String
+  requestingFacilityId     String
+  requestingFacilityName   String
+  requestedScopes          String[]
+  durationPreset           String
+  durationHours            Float
+  encryptedClinicalReason  String               // AES-256-GCM
+  hashedOtp                String               // SHA-256 of the one-time code; the code itself is never stored
+  otpExpiresAt             DateTime
+  otpAttemptsRemaining     Int
+  status                   ConsentRequestStatus @default(PENDING)
+  createdAt                DateTime
+
+  @@index([patientId, status])
 }
 
 model ConsentGrant {
-  id                String    @id @default(uuid())
-  patientId         String
-  patient           Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  targetFacilityId  String?
-  targetFacility    Facility? @relation(fields: [targetFacilityId], references: [id])
-  targetClinicianId String?
-  scopes            String[]  // ['all'] or ['Condition', 'MedicationStatement', etc.]
-  validFrom         DateTime  @default(now())
-  validUntil        DateTime
-  isRevoked         Boolean   @default(false)
-  revokedAt         DateTime?
-  oneTimePasscode   String?   // Hashed OTP for SMS verification
-  createdAt         DateTime  @default(now())
+  id                       String    @id
+  patientId                String
+  patient                  Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  targetFacilityId         String?
+  targetFacility           Facility? @relation(fields: [targetFacilityId], references: [id])
+  targetClinicianId        String?
+  scopes                   String[]  // ['all'] or ['Condition', 'MedicationStatement', etc.]
+  requestingClinicianName  String
+  requestingFacilityName   String
+  encryptedClinicalReason  String    // AES-256-GCM
+  validUntil               DateTime
+  isRevoked                Boolean   @default(false)
+  revokedAt                DateTime?
+  revocationReason         String?
+  createdAt                DateTime
 
   @@index([patientId, isRevoked, validUntil])
 }
 
 model EmergencyAccessGrant {
-  id                String           @id @default(uuid())
-  emergencyCodeId   String
-  emergencyCode     EmergencyCode    @relation(fields: [emergencyCodeId], references: [id])
-  patientId         String
-  patient           Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  clinicianId       String
-  clinician         Clinician        @relation("TreatingClinician", fields: [clinicianId], references: [id])
-  facilityId        String
-  facility          Facility         @relation(fields: [facilityId], references: [id])
-  
-  reason            BreakGlassReason
-  reasonDetails     String?
-  grantedAt         DateTime         @default(now())
-  expiresAt         DateTime         // grantedAt + 60 minutes
-  fullHistoryAccess Boolean          @default(false)
-  coSignClinicianId String?
-  coSignClinician   Clinician?       @relation("CoSigningClinician", fields: [coSignClinicianId], references: [id])
-  coSignReason      String?
+  id                     String           @id
+  patientId              String
+  patient                Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  encryptedEmergencyCode String           // AES-256-GCM: the code the clinician entered
+  clinicianId            String
+  clinician              Clinician        @relation("TreatingClinician", fields: [clinicianId], references: [id])
+  facilityId             String
+  facility               Facility         @relation(fields: [facilityId], references: [id])
+  facilityName           String
+  treatingDoctorName     String
 
-  notificationSent  Boolean          @default(false)
-  isDisputed        Boolean          @default(false)
-  disputeReason     String?
-  disputedAt        DateTime?
+  reason                 BreakGlassReason
+  encryptedReasonDetails String?          // AES-256-GCM
+  grantedAt              DateTime
+  expiresAt              DateTime         // grantedAt + 60 minutes
+  fullHistoryAccess      Boolean          @default(false)
+  coSignClinicianId      String?
+  coSignClinician        Clinician?       @relation("CoSigningClinician", fields: [coSignClinicianId], references: [id])
+  coSignDoctorName       String?
+  encryptedCoSignReason  String?          // AES-256-GCM
 
-  createdAt         DateTime         @default(now())
+  isDisputed             Boolean          @default(false)
+  disputeReason          String?
 
   @@index([patientId, expiresAt])
 }
 
-model AuditLog {
-  id            String     @id @default(uuid())
-  sequenceNumber BigInt    @unique @default(autoincrement())
-  timestamp     DateTime   @default(now())
-  actorId       String?
-  actor         User?      @relation("ActorAuditLogs", fields: [actorId], references: [id])
-  subjectId     String?
-  subject       Patient?   @relation("SubjectAuditLogs", fields: [subjectId], references: [id])
-  
-  action        String     // e.g. "EMERGENCY_SCAN", "RECORD_READ", "CONSENT_REVOKE"
-  accessType    AccessType
-  resourceType  String?
-  resourceId    String?
-  facilityId    String?
-  countryCode   String     @default("NG")
-
-  ipAddress     String
-  userAgent     String
-  reason        String?
-
-  // Tamper Evidence (Hash Chain)
-  previousHash  String
-  currentHash   String     // SHA256(sequenceNumber + timestamp + actorId + subjectId + action + previousHash)
-
-  @@index([subjectId, timestamp])
-  @@index([actorId, timestamp])
+model DisputeTicket {
+  ticketId              String        @id
+  auditLogId            String        @unique
+  patientId             String
+  actorId               String
+  facilityId            String?
+  accessType            AccessType
+  encryptedDisputeReason String       // AES-256-GCM
+  createdAt             DateTime
+  status                DisputeStatus @default(PENDING_REVIEW)
+  adminNotes            String?
 }
 
+// Messages sent to patients, contacts and clinicians (SMS, email, push). Recipient and body are encrypted:
+// bodies can contain one-time codes and health information.
+model NotificationLog {
+  id                 String   @id
+  channel            String   // SMS | EMAIL | PUSH
+  encryptedRecipient String   // AES-256-GCM: phone, email or user id
+  encryptedTitle     String?  // AES-256-GCM: subject or push title
+  encryptedBody      String   // AES-256-GCM
+  createdAt          DateTime
+
+  @@index([createdAt])
+}
+
+// Tamper-evident audit chain. No foreign keys: actors may be patients, staff or systems, and the log is never
+// rewritten. Appends happen under a transaction-scoped advisory lock so concurrent writers cannot fork the chain.
+// A facility EMR's machine credentials (Phase 15). Only an scrypt hash of the secret is stored.
+model FacilityApiClient {
+  id         String    @id
+  facilityId String
+  facility   Facility  @relation(fields: [facilityId], references: [id])
+  name       String
+  clientId   String    @unique
+  secretHash String
+  scopes     String[]
+  status     String    // ACTIVE | REVOKED
+  createdBy  String    // admin user id
+  createdAt  DateTime
+  lastUsedAt DateTime?
+}
+
+// A facility identifier (e.g. MRN) learnt from a matched import. Keyed hash for lookup; encrypted copy for re-hashing.
+model FacilityPatientLink {
+  valueHash      String   @id
+  facilityId     String
+  system         String
+  encryptedValue String
+  patientId      String
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  createdAt      DateTime
+
+  @@index([facilityId, patientId])
+}
+
+// AI intake (Phase 15): the source (encrypted), the adapters used, and the proposals with their source spans.
+model IntakeSession {
+  id                  String   @id
+  patientId           String
+  patient             Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  clinicianId         String
+  facilityId          String
+  kind                String   // photo | voice | text
+  ocrAdapter          String?
+  sttAdapter          String?
+  llmAdapter          String
+  model               String
+  encryptedSourceText String
+  encryptedFile       String?
+  fileMimeType        String?
+  fileSha256          String?
+  encryptedProposals  String
+  status              String   // review | signed
+  createdAt           DateTime
+  updatedAt           DateTime
+
+  @@index([patientId])
+}
+
+// National identifiers (Phase 16): encrypted value plus a blind index (HMAC-SHA256 under IDENTITY_INDEX_KEY) for
+// exact-match lookup without decrypting. The raw number is never stored.
+model PatientIdentifier {
+  id             String    @id
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  country        String
+  idType         String
+  blindIndex     String    @unique
+  encryptedValue String
+  last2          String
+  status         String    // verified | mismatch | not_found | unavailable
+  matchScore     Float
+  verifier       String
+  verifiedAt     DateTime?
+  createdAt      DateTime
+
+  @@index([patientId])
+}
+
+// Possible duplicates for a records officer or platform admin to review (never merged automatically).
+model DuplicateReview {
+  id                 String    @id
+  patientId          String
+  candidatePatientId String
+  score              Float
+  breakdown          Json
+  facilityId         String
+  source             String    // registration | import
+  status             String    // OPEN | MERGED | NOT_DUPLICATE
+  createdAt          DateTime
+  reviewedBy         String?
+  reviewedAt         DateTime?
+
+  @@index([status])
+}
+
+// A merge links mergedId under survivorId; records stay where they are. UNDONE after an unmerge.
+model PatientMerge {
+  id         String    @id
+  survivorId String
+  mergedId   String
+  reviewId   String?
+  mergedBy   String
+  mergedAt   DateTime
+  status     String    // ACTIVE | UNDONE
+  unmergedBy String?
+  unmergedAt DateTime?
+
+  @@index([survivorId])
+}
+
+// Facility self-registration (Phase 18): contact and accreditation document encrypted; PENDING until verified.
+model FacilityApplication {
+  facilityId         String    @id
+  encryptedContact   String
+  documentId         String
+  encryptedFilename  String
+  documentMimeType   String
+  documentSha256     String
+  documentSizeBytes  Int
+  encryptedDocument  String
+  status             String    // PENDING | VERIFIED | REJECTED
+  submittedAt        DateTime
+  reviewedBy         String?
+  reviewedAt         DateTime?
+  rejectionReason    String?
+}
+
+// Staff invitation links: only the token's SHA-256 is stored; single use; expires.
+model StaffInvite {
+  id         String    @id
+  accountId  String
+  facilityId String
+  role       String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdBy  String
+  createdAt  DateTime
+}
+
+// Facility subscriptions (Phase 18). Patients are never billed; emergency features never depend on this.
+model Subscription {
+  id               String   @id
+  facilityId       String   @unique
+  plan             String
+  status           String   // TRIALING | PENDING_PAYMENT | ACTIVE | PAST_DUE | EXPIRED | CANCELLED
+  currentPeriodEnd DateTime
+  provider         String   // trial | paystack | mpesa
+  providerRef      String?
+  lastEventId      String?
+  createdAt        DateTime
+  updatedAt        DateTime
+}
+
+// Audit agent flags (Phase 19): rule-based findings for human review. No names or patient identifiers in the
+// explanation; the reviewer's note is encrypted. Nothing happens to a clinician automatically.
+model AnomalyFlag {
+  id                  String    @id
+  rule                String    // BREAK_GLASS_PER_SHIFT | SCAN_WITHOUT_ENCOUNTER | SCAN_OUTSIDE_COUNTRY | REPEATED_PATIENT_SCANS
+  dedupeKey           String    @unique
+  clinicianId         String
+  facilityId          String
+  eventRefs           String[]
+  windowStart         DateTime
+  windowEnd           DateTime
+  explanation         String
+  status              String    // OPEN | DISMISSED | CONFIRMED
+  createdAt           DateTime
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  encryptedReviewNote String?
+
+  @@index([status, createdAt])
+}
+
+// Outbound sync to a national health information exchange (Phase 17). Ids only: the record is read at send time.
+model OutboxMessage {
+  id            String    @id
+  kind          String    // hie-push
+  connector     String    // country code of the connector
+  patientId     String
+  recordId      String
+  resourceType  String
+  facilityId    String
+  status        String    // PENDING | SENT | DEAD | CANCELLED
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime
+  lastError     String?
+  remoteId      String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sentAt        DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([facilityId])
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+// One record per SMS (Phase 13). The phone number is stored only as a keyed hash plus its last 3 digits; the
+// message text is never stored here (templateId says which template produced it).
+model NotificationDelivery {
+  id                String         @id
+  channel           String         // SMS
+  provider          String         // console | africastalking
+  toHash            String         // HMAC-SHA256 (FIELD_ENCRYPTION_KEY-derived), same as User.phoneHash
+  toLast3           String
+  templateId        String
+  status            DeliveryStatus
+  providerStatus    String?        // the provider's own word, from the send response or a delivery report
+  providerMessageId String?
+  attempts          Int            @default(0)
+  lastError         String?        // never the phone number or the text
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  @@index([providerMessageId])
+  @@index([toHash])
+}
+
+model AuditLog {
+  id              String     @id
+  sequenceNumber  Int        @unique
+  timestamp       String     // ISO 8601 exactly as hashed
+  actorId         String
+  subjectId       String?
+  action          String     // e.g. "OFFLINE_EMERGENCY_SCAN", "CLINICAL_RECORDS_READ_BATCH"
+  accessType      AccessType
+  resourceType    String?
+  resourceId      String?
+  facilityId      String?
+  countryCode     String?
+  ipAddress       String
+  userAgent       String
+  encryptedReason String?    // AES-256-GCM; the hash covers the plaintext reason
+
+  // Tamper Evidence (Hash Chain)
+  previousHash    String
+  currentHash     String     // SHA-256 over the canonical entry (see src/lib/audit/hashChain.ts)
+
+  @@index([subjectId, sequenceNumber])
+  @@index([actorId, sequenceNumber])
+}

@@ -10,11 +10,15 @@
       <div class="content-container">
         <div id="cl-signin" class="panel narrow-panel">
           <h2 class="panel-title">Clinician sign-in</h2>
-          <p class="panel-sub">Only clinicians whose licence has been checked can sign in. Five wrong codes lock the account.</p>
+          <p class="panel-sub">Password, then your authenticator code. Five failed attempts lock the account.</p>
           <form id="cl-login-form" class="stack-form">
             <div class="form-group">
               <label for="cl-clinician">Clinician</label>
               <select id="cl-clinician" required></select>
+            </div>
+            <div class="form-group">
+              <label for="cl-password">Password (not needed for the demo clinicians)</label>
+              <input id="cl-password" type="password" autocomplete="current-password" maxlength="200">
             </div>
             <div class="form-group">
               <label for="cl-totp">Authenticator code (6 digits)</label>
@@ -42,6 +46,7 @@
             <button class="tab active" role="tab" data-tab="lookup" aria-selected="true">Patient lookup</button>
             <button class="tab" role="tab" data-tab="records" aria-selected="false">My patients</button>
             <button class="tab" role="tab" data-tab="emergency" aria-selected="false">Emergency grants</button>
+            <button class="tab" role="tab" data-tab="intake" aria-selected="false">Intake from paper</button>
           </div>
 
           <div class="tab-panel" id="cl-tab-lookup" role="tabpanel">
@@ -111,6 +116,58 @@
                 <button type="button" class="btn-text-link" id="fh-close">Close</button>
               </div>
               <ol class="timeline" id="fh-timeline"></ol>
+            </div>
+          </div>
+          <div class="tab-panel" id="cl-tab-intake" role="tabpanel" hidden>
+            <div id="intake-start">
+              <h2 class="panel-title">Intake from paper or voice</h2>
+              <p class="panel-sub">The assistant proposes draft records from a note. Nothing is saved to the record until you review and sign. Each proposed value shows the words it came from; amber values need a closer look.</p>
+              <form id="intake-form" class="stack-form">
+                <div class="form-group">
+                  <label for="in-patient">Patient (consent required)</label>
+                  <select id="in-patient" required></select>
+                </div>
+                <fieldset class="form-group intake-kinds">
+                  <legend>Source</legend>
+                  <label><input type="radio" name="in-kind" value="text" checked> Paste or type</label>
+                  <label><input type="radio" name="in-kind" value="photo"> Photo of the paper record</label>
+                  <label><input type="radio" name="in-kind" value="voice"> Voice note</label>
+                </fieldset>
+                <div class="form-group" id="in-text-group">
+                  <label for="in-text">Note text</label>
+                  <textarea id="in-text" rows="8" maxlength="20000" placeholder="Diagnosis: ...&#10;Allergy: ...&#10;Medications: ...&#10;BP 120/80"></textarea>
+                </div>
+                <div class="form-group" id="in-photo-group" hidden>
+                  <label for="in-photo">Photo (PDF, JPEG or PNG)</label>
+                  <input id="in-photo" type="file" accept="image/jpeg,image/png,application/pdf" capture="environment">
+                </div>
+                <div class="form-group" id="in-voice-group" hidden>
+                  <span class="field-label">Voice note</span>
+                  <div class="intake-voice">
+                    <button type="button" class="btn btn-secondary-pill btn-small" id="in-rec"><span>Start recording</span></button>
+                    <span id="in-rec-status" aria-live="polite">Not recorded</span>
+                  </div>
+                </div>
+                <p class="form-error" id="in-error" role="alert" hidden></p>
+                <button type="submit" class="btn btn-pill-primary"><span>Propose drafts</span></button>
+              </form>
+            </div>
+            <div id="intake-review" hidden>
+              <div class="panel-head">
+                <h2 class="panel-title">Review drafts</h2>
+                <div class="lc-actions">
+                  <button type="button" class="btn btn-pill-primary" id="in-sign-all"><span>Sign all remaining drafts</span></button>
+                  <button type="button" class="btn-text-link" id="in-close">New intake</button>
+                </div>
+              </div>
+              <p class="panel-sub" id="in-meta"></p>
+              <div class="intake-grid">
+                <div class="panel">
+                  <h3 class="panel-title">Source</h3>
+                  <div class="intake-source" id="in-source"></div>
+                </div>
+                <div id="in-proposals" class="card-list"></div>
+              </div>
             </div>
           </div>
         </div>

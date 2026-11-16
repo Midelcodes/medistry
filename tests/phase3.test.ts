@@ -92,7 +92,8 @@ describe('2. Patient Profile & AES-256-GCM Field-Level Encryption', () => {
     const ciphertext = encryptField(plaintext);
 
     assert.notEqual(ciphertext, plaintext);
-    assert.match(ciphertext, /^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/, 'Format must be iv:tag:ciphertext');
+    // Phase 14: ciphertexts carry the key version (v<n>:) so the field key can be rotated.
+    assert.match(ciphertext, /^v1:[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/, 'Format must be v<version>:iv:tag:ciphertext');
 
     const decrypted = decryptField(ciphertext);
     assert.equal(decrypted, plaintext);
@@ -100,13 +101,13 @@ describe('2. Patient Profile & AES-256-GCM Field-Level Encryption', () => {
 
   test('Tampering with ciphertext or authentication tag fails decryption', () => {
     const ciphertext = encryptField('Confidential NIN: 12345678901');
-    const parts = ciphertext.split(':');
+    const parts = ciphertext.split(':'); // v<n>, iv, tag, ciphertext
 
     // Alter one byte of the ciphertext payload (preserving even hex length)
-    const lastChar = parts[2].slice(-1);
+    const lastChar = parts[3].slice(-1);
     const flippedChar = lastChar === '0' ? '1' : '0';
-    const corruptedPayload = parts[2].slice(0, -1) + flippedChar;
-    const tampered = `${parts[0]}:${parts[1]}:${corruptedPayload}`;
+    const corruptedPayload = parts[3].slice(0, -1) + flippedChar;
+    const tampered = `${parts[0]}:${parts[1]}:${parts[2]}:${corruptedPayload}`;
 
     assert.throws(() => {
       decryptField(tampered);

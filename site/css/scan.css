@@ -1,0 +1,71 @@
+/* Offline emergency card scanner (/s). High contrast, large type, works without web fonts. */
+.scan-page { max-width: 760px; margin: 0 auto; padding: 110px 16px 48px; color: #0f172a; }
+.scan-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.scan-title { font-size: 1.6rem; margin: 0; }
+.scan-intro { color: #334155; margin: 8px 0 20px; }
+.net-pill { font-size: 0.8rem; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid currentColor; }
+.net-pill.online { color: #166534; background: #dcfce7; }
+.net-pill.offline { color: #92400e; background: #fef3c7; }
+
+.scan-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.scan-btn { min-height: 48px; padding: 10px 18px; font-size: 1rem; font-weight: 700; border-radius: 10px; border: 2px solid #0f172a; background: #ffffff; color: #0f172a; cursor: pointer; }
+.scan-btn.primary { background: #0f172a; color: #ffffff; }
+.scan-btn:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+.camera-box { margin-top: 16px; }
+.camera-box video { width: 100%; max-height: 60vh; background: #000; border-radius: 12px; object-fit: cover; }
+.scan-hint { font-weight: 600; margin: 8px 0 0; }
+.scan-msg { min-height: 1.4em; font-weight: 600; color: #92400e; }
+.paste-form { display: grid; gap: 8px; margin-top: 20px; }
+.paste-form label { font-weight: 700; }
+.paste-form textarea { width: 100%; font: 0.9rem/1.4 ui-monospace, Consolas, monospace; padding: 10px; border: 2px solid #64748b; border-radius: 10px; }
+.paste-form .scan-btn { justify-self: start; }
+
+/* Results */
+.scan-result { margin-top: 8px; }
+.res-badge { display: inline-block; font-weight: 900; letter-spacing: 0.04em; padding: 6px 12px; border-radius: 8px; background: #166534; color: #ffffff; }
+.res-vitals { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.res-vital { border: 3px solid #0f172a; border-radius: 12px; padding: 12px 14px; background: #ffffff; }
+.res-label { font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #334155; }
+.res-big { font-size: 2.6rem; font-weight: 900; line-height: 1.05; }
+.res-dnr { background: #0f172a; color: #ffffff; font-size: 1.3rem; font-weight: 900; text-align: center; padding: 14px; border-radius: 12px; margin: 12px 0; }
+.res-allergies { background: #fee2e2; color: #991b1b; border: 3px solid #b91c1c; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+.res-allergies ul, .res-section ul { margin: 6px 0 0; padding-left: 22px; font-size: 1.15rem; }
+.res-allergies li { font-weight: 800; }
+.res-allergies .res-pr { font-style: normal; font-weight: 700; font-size: 0.95rem; color: #7f1d1d; }
+.res-section { border-top: 2px solid #cbd5e1; padding: 10px 0; }
+.res-section p { margin: 6px 0 0; font-size: 1.1rem; }
+.res-call { display: inline-flex; align-items: center; min-height: 48px; margin-top: 8px; padding: 10px 18px; border-radius: 10px; background: #166534; color: #ffffff; font-weight: 800; font-size: 1.1rem; text-decoration: none; }
+.res-foot { margin-top: 14px; font-size: 0.95rem; color: #1e293b; font-weight: 600; }
+.res-expired { background: #fef3c7; color: #78350f; border: 3px solid #b45309; border-radius: 12px; padding: 12px 14px; font-weight: 800; }
+.res-expired p { margin: 4px 0 0; font-weight: 700; }
+.res-unverified { outline: 4px dashed #b45309; outline-offset: 6px; border-radius: 12px; padding: 4px; }
+.res-again { margin-top: 18px; }
+
+/* Full-screen stop states: no medical data is shown */
+.res-stop { position: fixed; inset: 0; z-index: 2000; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 16px; padding: 24px; text-align: center; }
+.res-stop h2 { font-size: 2rem; line-height: 1.15; margin: 0; max-width: 18ch; }
+.res-stop p { font-size: 1.1rem; max-width: 36ch; margin: 0; }
+.res-stop.red { background: #b91c1c; color: #ffffff; }
+.res-stop.amber { background: #fef3c7; color: #78350f; }
+.res-stop .scan-btn { border-color: currentColor; }
+
+/* Clinician pass panel and the reason gate before opt-in fields */
+.clin-panel { border: 2px solid #cbd5e1; border-radius: 12px; padding: 10px 14px; margin: 0 0 18px; background: #ffffff; }
+.clin-panel summary { cursor: pointer; min-height: 32px; line-height: 1.5; }
+.clin-note { color: #334155; margin: 8px 0; }
+.clin-form { display: grid; gap: 6px; margin: 8px 0; }
+.clin-form label { font-weight: 700; }
+.clin-form select, .clin-form input { min-height: 44px; font-size: 1rem; padding: 6px 10px; border: 2px solid #64748b; border-radius: 8px; }
+.clin-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.clin-row input { flex: 1; min-width: 120px; letter-spacing: 0.2em; }
+.queue-status { font-size: 0.85rem; color: #334155; }
+.res-status-banner { background: #fef3c7; color: #78350f; border: 3px solid #b45309; border-radius: 12px; padding: 12px 14px; font-weight: 800; margin-bottom: 12px; }
+.res-locked { border: 2px dashed #64748b; border-radius: 12px; padding: 12px 14px; margin: 12px 0; }
+.res-locked p { margin: 0 0 8px; font-weight: 700; }
+.reason-form { display: grid; gap: 8px; }
+.reason-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
+.reason-form legend { font-weight: 800; margin-bottom: 4px; }
+.reason-form label.opt { display: flex; gap: 10px; align-items: center; min-height: 40px; font-size: 1.05rem; }
+.reason-form input[type="radio"] { width: 20px; height: 20px; }
+.reason-form textarea { width: 100%; padding: 8px; border: 2px solid #64748b; border-radius: 8px; font-size: 1rem; }
+.res-recorded { color: #166534; font-weight: 700; }

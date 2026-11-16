@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Medistry triage MCP server (team-built). Stdio transport.
 // Tools: score_triage_priority, flag_deterioration, queue_add_patient, queue_get, queue_call_next,
-//        route_referral, get_emergency_summary (reads Medistry through its audited break-glass API).
+//        route_referral, get_emergency_summary (reads Medistry through its audited break-glass API),
+//        verify_offline_card (verifies a signed offline card locally; only the public keys are fetched).
 // Data residency: the only network call is to MEDISTRY_URL, and only to hosts in MEDISTRY_ALLOWED_HOSTS
 // (default localhost). Queues are in-process memory and use pseudonymous patient references.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,12 +11,14 @@ import { z } from "zod";
 import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_SIGNS } from "./tews.js";
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
 import { emergencySummary } from "./medistry-client.js";
+import { verifyOfflineCard } from "./offline-card.js";
+import { startupBanner, withValidationBanner } from "./validation.js";
 
 const obs = {
   mobility: z.enum(["walking", "with_help", "immobile"]),
-  respiratoryRate: z.number().min(0).max(80).describe("breaths/min"),
-  heartRate: z.number().min(0).max(300).describe("beats/min"),
-  systolicBP: z.number().min(0).max(300).describe("mmHg"),
+  respiratoryRate: z.number().int().min(0).max(80).describe("breaths/min (whole number)"),
+  heartRate: z.number().int().min(0).max(300).describe("beats/min (whole number)"),
+  systolicBP: z.number().int().min(0).max(300).describe("mmHg (whole number)"),
   temperatureC: z.number().min(25).max(45),
   avpu: z.enum(["alert", "voice", "pain", "unresponsive"]),
   trauma: z.boolean().default(false),
@@ -36,13 +39,13 @@ server.registerTool("score_triage_priority", {
   title: "Score triage priority (SATS TEWS)",
   description: "Scores an adult patient (age >= 12) with the South African Triage Scale TEWS plus clinical discriminators. Returns colour category, target time to clinician, score breakdown and reasons. Decision support only.",
   inputSchema: { age: z.number().int().min(12).max(120), ...obs, signs },
-}, async ({ age, signs: s, ...o }) => ok({ age, ...triage({ ...o, signs: s }) }));
+}, async ({ age, signs: s, ...o }) => ok(withValidationBanner({ age, ...triage({ ...o, signs: s }) })));
 
 server.registerTool("flag_deterioration", {
   title: "Flag clinical deterioration",
   description: "Takes 2-12 observation sets ordered oldest to newest and flags worsening TEWS trend, sudden jumps, threshold crossings or drops in consciousness.",
   inputSchema: { observations: z.array(obsSchema).min(2).max(12) },
-}, async ({ observations }) => ok(detectDeterioration(observations)));
+}, async ({ observations }) => ok(withValidationBanner(detectDeterioration(observations))));
 
 server.registerTool("queue_add_patient", {
   title: "Add triaged patient to a facility queue",
@@ -134,4 +137,16 @@ server.registerTool("get_emergency_summary", {
   catch (e) { return err(e.message); }
 });
 
+server.registerTool("verify_offline_card", {
+  title: "Verify an offline Medistry emergency card",
+  description: "Verifies the ES256 signature of an offline Medistry card (the token, or the full card link .../s#token) using public keys fetched only from MEDISTRY_URL (allowlisted hosts). Returns a minimised triage view: blood group, genotype, allergies, DNR, conditions, medications, recent diagnosis, card version, verified, expired. Never returns the emergency contact or the patient id. If verified is false, no medical data is returned and the card must not be used.",
+  inputSchema: { token: z.string().min(20).max(6000).describe("Card token or the card link ${APP_URL}/s#<token>") },
+}, async ({ token }) => {
+  try { return ok(await verifyOfflineCard(token)); }
+  catch (e) { return err(e.message); }
+});
+
+// Stdout carries the MCP protocol, so the start-up banner goes to stderr.
+const banner = startupBanner();
+if (banner) console.error(banner);
 await server.connect(new StdioServerTransport());

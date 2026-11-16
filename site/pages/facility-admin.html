@@ -1,0 +1,156 @@
+    <section class="page-header">
+      <div class="content-container">
+        <div class="pill-category">For facilities</div>
+        <h1 class="page-title">Facility Admin</h1>
+        <p class="page-lead">Run your facility on Medistry: staff, integrations, usage and billing. Facility admins never see patient records.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="content-container">
+        <!-- Invitation (link from SMS or email) -->
+        <div id="fa-invite" class="panel narrow-panel" hidden>
+          <h2 class="panel-title">Accept your invitation</h2>
+          <p class="panel-sub" id="fa-invite-sub">We send a 6-digit code to the phone number on your invitation.</p>
+          <button type="button" class="btn btn-pill-primary" id="fa-invite-send"><span>Send me a code</span></button>
+          <form id="fa-invite-form" class="stack-form" hidden>
+            <div class="form-group">
+              <label for="fa-invite-code">Code from the SMS (6 digits)</label>
+              <input id="fa-invite-code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+            </div>
+            <button type="submit" class="btn btn-pill-primary"><span>Accept invitation</span></button>
+          </form>
+          <form id="fa-cred-form" class="stack-form" hidden>
+            <div class="form-group">
+              <label for="fa-cred-password">Choose a password (at least 12 characters)</label>
+              <input id="fa-cred-password" type="password" autocomplete="new-password" minlength="12" maxlength="200" required>
+            </div>
+            <button type="submit" class="btn btn-pill-primary"><span>Save and set up the authenticator</span></button>
+          </form>
+          <div id="fa-cred-done" hidden>
+            <p>Scan this QR code with your authenticator app. You will need its code, with your password, to sign in.</p>
+            <div id="fa-cred-qr" class="qr-box"></div>
+            <button type="button" class="btn btn-pill-primary" id="fa-cred-continue"><span>Continue</span></button>
+          </div>
+          <p class="form-error" id="fa-invite-error" role="alert" hidden></p>
+        </div>
+
+        <!-- Sign-in -->
+        <div id="fa-signin" class="panel narrow-panel">
+          <h2 class="panel-title">Admin sign-in</h2>
+          <form id="fa-login-form" class="stack-form">
+            <div class="form-group">
+              <label for="fa-login-id">Email (or account id)</label>
+              <input id="fa-login-id" type="text" autocomplete="username" required>
+            </div>
+            <div class="form-group">
+              <label for="fa-login-password">Password <span class="field-hint">(not needed for the demo admins)</span></label>
+              <input id="fa-login-password" type="password" autocomplete="current-password" maxlength="200">
+            </div>
+            <div class="form-group">
+              <label for="fa-login-totp">Authenticator code (6 digits)</label>
+              <input id="fa-login-totp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
+            </div>
+            <div class="demo-hint">
+              <span>Demo: try <code>admin-fac-luth-001-demo</code> (facility) or <code>admin-platform-demo</code> (reviews).</span>
+              <button type="button" class="btn-text-link" id="fa-demo-code">Show the current demo code</button>
+            </div>
+            <p class="form-error" id="fa-login-error" role="alert" hidden></p>
+            <button type="submit" class="btn btn-pill-primary"><span>Sign in</span></button>
+          </form>
+          <p class="panel-note">New facility? <a href="#register" id="fa-show-register">Apply to join Medistry</a>.</p>
+        </div>
+
+        <!-- Facility application -->
+        <div id="fa-register" class="panel narrow-panel" hidden>
+          <h2 class="panel-title">Apply to join Medistry</h2>
+          <p class="panel-sub">A Medistry platform admin checks your accreditation, then sends your first admin an invitation.</p>
+          <form id="fa-register-form" class="stack-form">
+            <div class="form-group"><label for="fr-name">Facility name</label><input id="fr-name" required maxlength="160"></div>
+            <div class="form-group"><label for="fr-type">Type</label>
+              <select id="fr-type"><option value="HOSPITAL">Hospital</option><option value="CLINIC">Clinic</option><option value="LAB">Laboratory</option><option value="PHARMACY">Pharmacy</option></select></div>
+            <div class="form-group"><label for="fr-country">Country</label>
+              <select id="fr-country"><option value="NG">Nigeria</option><option value="KE">Kenya</option></select></div>
+            <div class="form-group"><label for="fr-registry">Facility registry code</label><input id="fr-registry" required maxlength="40"></div>
+            <div class="form-group"><label for="fr-address">Address</label><input id="fr-address" maxlength="200"></div>
+            <div class="form-group"><label for="fr-admin-name">First admin: full name</label><input id="fr-admin-name" required maxlength="120"></div>
+            <div class="form-group"><label for="fr-admin-email">First admin: email</label><input id="fr-admin-email" type="email" required></div>
+            <div class="form-group"><label for="fr-admin-phone">First admin: phone (international format)</label><input id="fr-admin-phone" type="tel" required placeholder="+234 800 000 0000"></div>
+            <div class="form-group"><label for="fr-doc">Accreditation document (PDF, JPEG or PNG)</label><input id="fr-doc" type="file" accept="application/pdf,image/jpeg,image/png" required></div>
+            <p class="form-error" id="fr-error" role="alert" hidden></p>
+            <button type="submit" class="btn btn-pill-primary"><span>Submit application</span></button>
+          </form>
+        </div>
+
+        <!-- Admin app -->
+        <div id="fa-app" hidden>
+          <div class="signed-bar">
+            <div>
+              <div class="signed-name" id="fa-name"></div>
+              <div class="signed-meta" id="fa-meta"></div>
+            </div>
+            <button type="button" class="btn btn-secondary-pill" id="fa-logout"><span>Sign out</span></button>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Facility admin sections">
+            <button class="tab active" role="tab" data-tab="staff" aria-selected="true">Staff</button>
+            <button class="tab" role="tab" data-tab="integrations" aria-selected="false">Integrations</button>
+            <button class="tab" role="tab" data-tab="usage" aria-selected="false">Usage</button>
+            <button class="tab" role="tab" data-tab="billing" aria-selected="false">Billing</button>
+            <button class="tab" role="tab" data-tab="review" aria-selected="false" hidden>Review</button>
+          </div>
+
+          <div class="tab-panel" id="fa-tab-staff" role="tabpanel">
+            <h2 class="panel-title">Clinicians</h2>
+            <div id="fa-clinicians" class="card-list"></div>
+            <h2 class="panel-title">Staff accounts</h2>
+            <div id="fa-staff" class="card-list"></div>
+            <h2 class="panel-title">Invite staff</h2>
+            <form id="fa-invite-staff" class="stack-form">
+              <div class="form-group"><label for="is-role">Role</label>
+                <select id="is-role"><option value="CLINICIAN">Clinician (registers with their licence)</option><option value="RECORDS_OFFICER">Records officer</option><option value="NURSE">Nurse</option><option value="FACILITY_ADMIN">Facility admin</option><option value="PHARMACIST">Pharmacist (pharmacies)</option></select></div>
+              <div class="form-group"><label for="is-name">Full name</label><input id="is-name" required maxlength="120"></div>
+              <div class="form-group"><label for="is-email">Email</label><input id="is-email" type="email" required></div>
+              <div class="form-group"><label for="is-phone">Phone (international format)</label><input id="is-phone" type="tel" required></div>
+              <p class="form-error" id="is-error" role="alert" hidden></p>
+              <button type="submit" class="btn btn-pill-primary"><span>Send invitation</span></button>
+            </form>
+          </div>
+
+          <div class="tab-panel" id="fa-tab-integrations" role="tabpanel" hidden>
+            <h2 class="panel-title">EMR API clients</h2>
+            <div id="fa-clients" class="card-list"></div>
+            <form id="fa-client-form" class="stack-form">
+              <div class="form-group"><label for="ac-name">New client: the system it is for</label><input id="ac-name" required maxlength="80" placeholder="e.g. KenyaEMR at the main site"></div>
+              <button type="submit" class="btn btn-pill-primary"><span>Create API client</span></button>
+            </form>
+            <div id="fa-client-secret" class="panel-note" hidden></div>
+            <h2 class="panel-title">National exchange</h2>
+            <div id="fa-exchange"></div>
+          </div>
+
+          <div class="tab-panel" id="fa-tab-usage" role="tabpanel" hidden>
+            <div class="form-group"><label for="us-days">Period</label>
+              <select id="us-days"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select></div>
+            <div id="fa-usage" class="stat-grid"></div>
+            <p class="panel-note" id="fa-usage-note"></p>
+          </div>
+
+          <div class="tab-panel" id="fa-tab-billing" role="tabpanel" hidden>
+            <div id="fa-billing"></div>
+          </div>
+
+          <!-- Platform admins only -->
+          <div class="tab-panel" id="fa-tab-review" role="tabpanel" hidden>
+            <h2 class="panel-title">Audit agent flags</h2>
+            <p class="panel-note">Rule-based prompts for review, not findings of wrongdoing. Nothing happens to a clinician automatically: you record a decision and a note.</p>
+            <button type="button" class="btn btn-secondary-pill btn-small" id="rv-run"><span>Run the rules now</span></button>
+            <div id="rv-flags" class="card-list"></div>
+            <h2 class="panel-title">Patient disputes</h2>
+            <div id="rv-disputes" class="card-list"></div>
+            <h2 class="panel-title">Facility applications</h2>
+            <div id="rv-applications" class="card-list"></div>
+          </div>
+        </div>
+      </div>
+    </section>

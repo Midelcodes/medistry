@@ -230,7 +230,8 @@ describe('3. Automated Multi-Channel Notifications & Telecom Outage Resilience',
     assert.strictEqual(results.length, 2);
     assert.ok(results.every(r => r.status === 'DELIVERED' && r.channel === 'SMS'));
     assert.strictEqual(consoleProvider.sentSmsLogs.length, 2);
-    assert.ok(consoleProvider.sentSmsLogs[0].message.includes('EMERGENCY BREAK-GLASS ALERT'));
+    // Phase 13: SMS carries no clinical detail, only who opened the record and where (template access_alert).
+    assert.ok(consoleProvider.sentSmsLogs[0].message.includes('Your Medistry record was accessed by'));
   });
 
   test('Gracefully degrades to Email and Push when SMS telecom providers encounter outages', async () => {

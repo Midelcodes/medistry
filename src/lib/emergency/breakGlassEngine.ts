@@ -11,6 +11,8 @@ import { ClinicalTimelineEngine } from '../clinical/timeline.ts';
 import { AuditChainManager } from '../audit/hashChain.ts';
 import { NotificationDispatcher, type DispatchedAlertResult } from '../notifications/dispatcher.ts';
 import type { ActorContext, EmergencyGrantContext } from '../policy/enforcer.ts';
+import { recentEncounters as signedRecentEncounters } from '../clinical/encounters.ts';
+import type { EmergencyGrantRepo } from '../data/repositories.ts';
 
 export type BreakGlassReason = 'UNCONSCIOUS' | 'LIFE_THREATENING' | 'PATIENT_UNABLE_TO_CONSENT' | 'OTHER';
 
@@ -31,8 +33,8 @@ export interface EmergencySummaryData {
   chronicCare: {
     chronicConditions: string[];
     activeMedications: Array<{ medicationName: string; dose: string; route: string; sinceDate: string }>;
-    implantsOrDevices?: string[];
-    pregnancyStatus?: string;
+    implantsOrDevices?: string[]; // only when recorded; never assumed
+    pregnancyStatus?: string;     // only when recorded; never assumed
   };
   recentEncounters: Array<{
     date: string;
@@ -69,6 +71,7 @@ export interface StoredEmergencyGrant extends EmergencyGrantContext {
   isDisputed: boolean;
   disputeReason?: string;
   coSignDoctorName?: string;
+  coSignReason?: string;
 }
 
 export class EmergencyBreakGlassEngine {
@@ -78,6 +81,20 @@ export class EmergencyBreakGlassEngine {
   private clinicalStore: ClinicalDataStore;
   private timelineEngine: ClinicalTimelineEngine;
   private dispatcher: NotificationDispatcher;
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: Pick<EmergencyGrantRepo, 'saveEmergencyGrant'>;
+  /** Records merged into this patient (Phase 16): their allergies, conditions and medications are shown too. */
+  mergedProfiles?: (patientId: string) => PatientEntity[];
+  /** The patient's own sign-in phone and recovery email (from their account), so the patient is alerted too. */
+  contactLookup?: (patientId: string) => { phone?: string; email?: string } | undefined;
+
+  /** Rebuilds grants from storage (start-up). */
+  hydrate(grants: StoredEmergencyGrant[]): void {
+    for (const g of [...grants].sort((a, b) => a.grantedAt.localeCompare(b.grantedAt))) {
+      this.grants.set(g.id, g);
+      this.activePatientGrants.set(g.patientId, g.id);
+    }
+  }
 
   constructor(
     auditManager: AuditChainManager,
@@ -183,6 +200,7 @@ export class EmergencyBreakGlassEngine {
 
     this.grants.set(grantId, grant);
     this.activePatientGrants.set(patient.id, grantId);
+    this.persistence?.saveEmergencyGrant(grant);
 
     // Append immutable audit row
     this.auditManager.appendEntry({
@@ -202,6 +220,8 @@ export class EmergencyBreakGlassEngine {
       {
         id: patient.id,
         fullName: `${demographics.firstName} ${demographics.lastName}`,
+        ...(this.contactLookup?.(patient.id) || {}),
+        locale: patient.preferredLocale,
         emergencyContacts: patient.emergencyContacts,
       },
       {
@@ -231,30 +251,20 @@ export class EmergencyBreakGlassEngine {
     const remainingMinutes = Math.max(0, Math.ceil((exp - now) / (1000 * 60)));
     const demo = decryptPatientDemographics(patient);
 
+    // A merged duplicate's safety data must not disappear: union of allergies, conditions and medications.
+    const others = this.mergedProfiles?.(patient.id) || [];
+    const uniq = <T>(xs: T[], key: (x: T) => string) => [...new Map(xs.map((x) => [key(x).toLowerCase(), x])).values()];
+    const allergies = uniq([...patient.allergies, ...others.flatMap((o) => o.allergies)], (a) => a.substance);
+    const chronicConditions = uniq([...patient.chronicConditions, ...others.flatMap((o) => o.chronicConditions)], (c) => c);
+    const activeMedications = uniq([...patient.activeMedications, ...others.flatMap((o) => o.activeMedications)], (m) => m.medicationName);
+
     // Separate drug allergies first (highest priority)
-    const drugAllergiesFirst = patient.allergies
+    const drugAllergiesFirst = allergies
       .filter((a) => a.category === 'drug')
       .map((a) => ({ substance: a.substance, reaction: a.reaction, severity: a.severity }));
 
-    // Mock last 5 encounters
-    const recentEncounters = [
-      {
-        date: '2026-09-14',
-        facilityName: 'Lagos University Teaching Hospital',
-        doctorName: 'Dr. Robert Caldwell',
-        diagnosis: 'Vaso-occlusive pain crisis',
-        treatment: 'IV Hydration & Analgesia protocol',
-        result: 'Stabilized and discharged',
-      },
-      {
-        date: '2026-05-22',
-        facilityName: 'National Hospital Abuja',
-        doctorName: 'Dr. Marcus Thorne',
-        diagnosis: 'Acute bacterial bronchitis',
-        treatment: 'Azithromycin 500mg 3-day course',
-        result: 'Resolved',
-      },
-    ];
+    // The patient's 5 most recent doctor-signed encounters, newest first (empty if none). Same source as the card.
+    const recentEncounters = signedRecentEncounters(this.clinicalStore, patient.id, 5);
 
     return {
       patient: {
@@ -271,14 +281,15 @@ export class EmergencyBreakGlassEngine {
       triageEssentials: {
         bloodGroup: patient.bloodGroup.replace('_', ' '),
         genotype: patient.genotype,
-        allergies: patient.allergies,
+        allergies,
         drugAllergiesFirst,
       },
       chronicCare: {
-        chronicConditions: patient.chronicConditions,
-        activeMedications: patient.activeMedications,
-        implantsOrDevices: ['None on record'],
-        pregnancyStatus: demo.gender === 'female' ? 'Non-pregnant (Self-reported)' : undefined,
+        chronicConditions,
+        activeMedications,
+        // Not stored anywhere in this build, so not reported (previously these were filled with assumed values).
+        implantsOrDevices: undefined,
+        pregnancyStatus: undefined,
       },
       recentEncounters,
       legalDirectives: {
@@ -329,6 +340,7 @@ export class EmergencyBreakGlassEngine {
     grant.coSignClinicianId = coSignClinicianId;
     grant.coSignDoctorName = coSignDoctorName;
     grant.coSignReason = coSignReason;
+    this.persistence?.saveEmergencyGrant(grant);
 
     // Append immutable audit entry
     this.auditManager.appendEntry({
@@ -355,6 +367,28 @@ export class EmergencyBreakGlassEngine {
   /**
    * Lists unexpired grants opened by a clinician (newest first).
    */
+  /** Grants opened at a facility since a date (usage dashboard: counts and timings only). */
+  grantsForFacility(facilityId: string, sinceIso: string): Array<{ id: string; grantedAt: string }> {
+    return [...this.grants.values()].filter((g) => g.facilityId === facilityId && g.grantedAt >= sinceIso).map((g) => ({ id: g.id, grantedAt: g.grantedAt }));
+  }
+
+  /** Break-glass grants opened since a time (audit anomaly rules, Phase 19). Metadata only, no record content. */
+  grantsSince(sinceIso: string): Array<{ id: string; clinicianId: string; patientId: string; facilityId: string; grantedAt: string }> {
+    return [...this.grants.values()].filter((g) => g.grantedAt >= sinceIso)
+      .map((g) => ({ id: g.id, clinicianId: g.clinicianId, patientId: g.patientId, facilityId: g.facilityId, grantedAt: g.grantedAt }));
+  }
+
+  /** Records that a clinician opened the emergency summary (access log; also gives the time from scan to summary). */
+  recordSummaryView(grantId: string, actorUserId: string, facilityId?: string): void {
+    const grant = this.grants.get(grantId);
+    if (!grant) return;
+    this.auditManager.appendEntry({
+      actorId: actorUserId, subjectId: grant.patientId, action: 'EMERGENCY_SUMMARY_VIEWED', accessType: 'EMERGENCY_BREAK_GLASS',
+      resourceType: 'EmergencyGrant', resourceId: grant.id, facilityId: facilityId || grant.facilityId,
+      ipAddress: '127.0.0.1', userAgent: 'ClinicalEmergencyPortal/1.0', reason: 'Emergency summary opened under the break-glass grant',
+    });
+  }
+
   getActiveGrantsForClinician(clinicianId: string): StoredEmergencyGrant[] {
     const now = Date.now();
     return Array.from(this.grants.values())

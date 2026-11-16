@@ -4,6 +4,7 @@
  */
 
 import { AuditChainManager, type ChainedAuditEntry } from './hashChain.ts';
+import type { EmergencyGrantRepo } from '../data/repositories.ts';
 
 export interface FormattedAccessLogEntry {
   auditId: string;
@@ -41,6 +42,13 @@ export interface DisputeTicket {
 
 export class PatientAccessLogManager {
   private disputes = new Map<string, DisputeTicket>(); // Key: auditLogId
+  /** Write-through repository (no-op in memory storage). */
+  persistence?: Pick<EmergencyGrantRepo, 'saveDispute'>;
+
+  /** Rebuilds dispute tickets from storage (start-up). */
+  hydrate(tickets: DisputeTicket[]): void {
+    for (const t of tickets) this.disputes.set(t.auditLogId, t);
+  }
   private clinicianNames = new Map<string, string>([
     ['doc-uuid-1', 'Dr. Robert Caldwell (Cardiothoracic)'],
     ['doc-uuid-2', 'Dr. Elena Rostova (Neurology)'],
@@ -69,6 +77,7 @@ export class PatientAccessLogManager {
   }
 
   private formatActionDescription(action: string, resourceType?: string): string {
+    if (action === 'OFFLINE_EMERGENCY_SCAN') return '🚨 Offline Emergency Card Scan (break-glass)';
     if (action.includes('EMERGENCY_BREAK_GLASS')) return '🚨 Emergency Break-Glass Scan & Critical Summary View';
     if (action.includes('CLINICAL_RECORD_WRITE')) return `✍️ Authored New ${resourceType || 'Clinical'} Record`;
     if (action.includes('CLINICAL_RECORD_VERSION_UPDATE')) return `🔄 Updated ${resourceType || 'Clinical'} Record (New Version)`;
@@ -160,6 +169,7 @@ export class PatientAccessLogManager {
     };
 
     this.disputes.set(auditLogId, ticket);
+    this.persistence?.saveDispute(ticket);
 
     // Append immutable audit log event for dispute creation
     this.auditManager.appendEntry({
@@ -198,6 +208,7 @@ export class PatientAccessLogManager {
 
     ticket.status = resolution;
     ticket.adminNotes = adminNotes;
+    this.persistence?.saveDispute(ticket);
 
     this.auditManager.appendEntry({
       actorId: adminId,

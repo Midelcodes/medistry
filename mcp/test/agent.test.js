@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { runAgent, redact, breakGlassAllowed, MAX_ITERATIONS, DEFAULT_TASK } from "../src/agent.js";
+import { runAgent, redact, breakGlassAllowed, llmAllowed, MAX_ITERATIONS, DEFAULT_TASK } from "../src/agent.js";
 import { createGeminiProvider, toFunctionDeclarations } from "../src/llm/gemini.js";
 
 let mcp;
@@ -67,7 +67,9 @@ test("loop executes tool calls, feeds results back and stops at final text", asy
     assert.match(requests[0].config.systemInstruction, rule);
   }
   assert.equal(requests[0].config.tools[0].functionDeclarations.length, (await mcp.listTools()).tools.length);
-  assert.equal(requests[0].contents[0].parts[0].text, DEFAULT_TASK);
+  // The model receives the minimised task: the patient reference is a placeholder, nothing else changes.
+  assert.equal(requests[0].contents[0].parts[0].text, DEFAULT_TASK.replace("PT-DEMO-01", "[REF_1]"));
+  assert.ok(!JSON.stringify(requests).includes("PT-DEMO-01"), "real patient reference never sent to the model");
 
   // Request 2: model's call replayed, then the real tool result as a function response.
   const [, modelTurn, toolTurn] = requests[1].contents;
@@ -134,4 +136,14 @@ test("CLI exits with a clear message when GEMINI_API_KEY or GEMINI_MODEL is unse
   assert.equal(r2.status, 1);
   assert.match(r2.stderr, /GEMINI_MODEL/);
   assert.ok(!r2.stderr.includes("x-not-real"));
+});
+
+test("Real data (DEMO_MODE=0) keeps the LLM path off unless an in-country model is approved", () => {
+  assert.equal(llmAllowed({}), true);
+  assert.equal(llmAllowed({ DEMO_MODE: "1" }), true);
+  assert.equal(llmAllowed({ DEMO_MODE: "0" }), false);
+  assert.equal(llmAllowed({ DEMO_MODE: "0", LLM_IN_COUNTRY_APPROVED: "1" }), true);
+  const r = spawnSync(process.execPath, ["src/agent.js", "task"], { env: { ...process.env, DEMO_MODE: "0", LLM_IN_COUNTRY_APPROVED: "", GEMINI_API_KEY: "" }, encoding: "utf8" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Refusing to run: DEMO_MODE=0/);
 });

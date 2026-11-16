@@ -3,6 +3,14 @@
 // Provider: Gemini via src/llm/gemini.js (swap in another provider with the same generate() interface).
 // Usage: npm run agent -- "<task text>"   (needs GEMINI_API_KEY and GEMINI_MODEL in the environment)
 // Synthetic data only. Outputs are decision support and need clinician validation.
+//
+// DATA PROTECTION: real patient data must not be sent to a foreign-hosted LLM (such as a cloud Gemini
+// endpoint outside the patient's country) without a lawful basis under the applicable law (for example the
+// Nigeria Data Protection Act 2023). Everything sent to the model goes through src/minimise.js first, which
+// strips names, contacts, ids and free-text notes, but minimisation alone is not a lawful basis.
+// Production should use an in-country or self-hosted model behind the same generate() interface.
+import { createMinimiser } from "./minimise.js";
+import { validationBanner } from "./validation.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,6 +23,8 @@ export const SYSTEM_PROMPT = `You are a triage and referral assistant for emerge
 - Do not invent clinical values. Use only values stated in the task or returned by a tool. If a required value is missing, say which one and stop rather than guessing.
 - Never call get_emergency_summary unless the task explicitly says the patient is unconscious AND provides a break-glass emergency code, and then only with confirmBreakGlass set to true. It is an audited break-glass that notifies the patient.
 - Use pseudonymous patient references only, never names.
+- Values written like [CARD_1], [CODE_1], [REF_1] or [ID_1] are placeholders for sensitive values that are kept off this conversation. Pass them to tools exactly as written.
+- If verify_offline_card returns verified: false, do not use any data from that card. Say clearly that the card could not be verified and that its data was not used.
 - Handover note rules: use only values given in the task or returned by a tool. Do not add diagnoses, differential diagnoses, oxygen or treatment targets, oxygen delivery details such as "room air", or any other value that was not provided. Write "not provided" for any field without a given value. For treatment, write only "clinician to decide".
 - All data is synthetic. Finish with a concise answer (triage category and reasons, referral options, and a short handover note when asked) and state clearly that the output is decision support that must be validated by a clinician.`;
 
@@ -71,9 +81,11 @@ function summarise({ ok, result }) {
 
 // The agent loop. llm: { generate }, mcp: MCP client (listTools, callTool). Returns
 // { text, iterations, steps, stoppedReason: "final" | "max_iterations" }.
-export async function runAgent({ llm, mcp, task, system = SYSTEM_PROMPT, maxIterations = MAX_ITERATIONS, log = () => {} }) {
+// The model only ever sees minimised text and tool results; placeholders in its tool arguments are mapped
+// back to the real values here, on this machine, before the MCP call.
+export async function runAgent({ llm, mcp, task, system = SYSTEM_PROMPT, maxIterations = MAX_ITERATIONS, log = () => {}, minimiser = createMinimiser() }) {
   const { tools } = await mcp.listTools();
-  const messages = [{ role: "user", text: task }];
+  const messages = [{ role: "user", text: minimiser.text(task) }];
   const steps = [];
   for (let i = 1; i <= maxIterations; i++) {
     const { text, toolCalls = [], raw } = await llm.generate({ system, messages, tools });
@@ -84,21 +96,36 @@ export async function runAgent({ llm, mcp, task, system = SYSTEM_PROMPT, maxIter
     const results = [];
     for (const call of toolCalls) {
       let out;
-      if (call.name === "get_emergency_summary" && !breakGlassAllowed(task, call.args)) {
+      const realArgs = minimiser.restore(call.args);
+      if (call.name === "get_emergency_summary" && !breakGlassAllowed(task, realArgs)) {
         out = { ok: false, result: { error: "Blocked by agent policy: break-glass needs an unconscious patient, an emergency code given in the task, and confirmBreakGlass=true." } };
       } else {
-        out = await execTool(mcp, call.name, call.args);
+        out = await execTool(mcp, call.name, realArgs);
       }
-      steps.push({ iteration: i, name: call.name, args: call.args, ok: out.ok, result: out.result });
-      log(`[${i}] ${call.name} ${short(call.args, 110)}\n    -> ${summarise(out)}`);
-      results.push({ id: call.id, name: call.name, result: out.result });
+      const shared = minimiser.value(out.result); // what the model is allowed to see
+      steps.push({ iteration: i, name: call.name, args: call.args, ok: out.ok, result: out.result, sentToModel: shared });
+      log(`[${i}] ${call.name} ${short(call.args, 110)}\n    -> ${summarise({ ok: out.ok, result: shared })}`);
+      results.push({ id: call.id, name: call.name, result: shared });
     }
     messages.push({ role: "tool", results });
   }
   return { text: null, iterations: maxIterations, steps, stoppedReason: "max_iterations" };
 }
 
+/**
+ * Real data (DEMO_MODE=0) must not go to an LLM outside the deployment country (docs/DEPLOYMENT.md). The agent
+ * refuses unless LLM_IN_COUNTRY_APPROVED=1 records that the model endpoint is in-country and approved.
+ */
+export function llmAllowed(env = process.env) {
+  return env.DEMO_MODE !== "0" || env.LLM_IN_COUNTRY_APPROVED === "1";
+}
+
 async function main() {
+  if (!llmAllowed()) {
+    console.error("Refusing to run: DEMO_MODE=0 means real data, and the LLM path is disabled for real data unless the model "
+      + "runs in-country and is approved (set LLM_IN_COUNTRY_APPROVED=1 only then). See docs/DEPLOYMENT.md.");
+    process.exit(1);
+  }
   const missing = ["GEMINI_API_KEY", "GEMINI_MODEL"].filter((k) => !process.env[k]?.trim());
   if (missing.length) {
     console.error(`Missing environment variable(s): ${missing.join(", ")}.\n`
@@ -119,9 +146,15 @@ async function main() {
 
   console.log(`Task:\n${task}\n\nModel: ${process.env.GEMINI_MODEL.trim()} | max ${MAX_ITERATIONS} iterations\n`);
   try {
-    const out = await runAgent({ llm, mcp, task, log: (s) => console.log(redact(s)) });
+    const minimiser = createMinimiser();
+    const out = await runAgent({ llm, mcp, task, minimiser, log: (s) => console.log(redact(s)) });
     console.log("\n=== Final answer ===");
     console.log(out.text ? redact(out.text) : `(no final answer: stopped after ${out.iterations} iterations)`);
+    // Local legend only: what the placeholders the model saw stand for (card tokens are not printed).
+    const legend = [...minimiser.placeholders()].filter(([p]) => !p.startsWith("[CARD_")).map(([p, v]) => `${p} = ${v}`);
+    if (legend.length) console.log(`\nPlaceholders (local only, never sent to the model): ${legend.join(", ")}`);
+    const banner = validationBanner();
+    if (banner) console.log(`\n${banner}.`);
     console.log("\nDecision support only, synthetic data. A clinician must validate every output.");
     if (out.stoppedReason !== "final") process.exitCode = 2;
   } finally {

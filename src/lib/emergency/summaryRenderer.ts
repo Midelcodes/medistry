@@ -5,6 +5,7 @@
  */
 
 import type { EmergencySummaryData } from './breakGlassEngine.ts';
+import { escapeHtml } from '../security/rateLimiter.ts';
 
 export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
   const { patient, triageEssentials, chronicCare, recentEncounters, legalDirectives, grantMeta } = data;
@@ -65,7 +66,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
           <td><span class="enc-date">${escapeHtml(e.date)}</span></td>
           <td>
             <strong>${escapeHtml(e.diagnosis)}</strong>
-            <div class="enc-sub">${escapeHtml(e.facilityName)} • Dr. ${escapeHtml(e.doctorName)}</div>
+            <div class="enc-sub">${escapeHtml(e.facilityName)} • ${escapeHtml(e.doctorName)}</div>
           </td>
           <td>
             <div>${escapeHtml(e.treatment)}</div>
@@ -73,7 +74,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
           </td>
         </tr>
       `).join('')
-    : '<tr><td colspan="3" class="text-muted">No recent clinical encounters recorded.</td></tr>';
+    : '<tr><td colspan="3" class="text-muted">No encounters on record</td></tr>';
 
   const emergencyContactsHtml = patient.emergencyContacts.map(c => `
     <div class="contact-card">
@@ -337,7 +338,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
       </div>
       <div class="triage-stat-card">
         <div class="stat-label">Pregnancy Status</div>
-        <div class="stat-value" style="font-size:16px; margin-top:8px;">${escapeHtml(chronicCare.pregnancyStatus || 'N/A')}</div>
+        <div class="stat-value" style="font-size:16px; margin-top:8px;">${escapeHtml(chronicCare.pregnancyStatus || 'Not recorded')}</div>
       </div>
     </section>
 
@@ -395,7 +396,7 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
 
       <div>
         <h4 style="font-size:13px; color:var(--text-muted); margin-bottom:4px;">Implants / Medical Devices:</h4>
-        <div class="text-muted">${chronicCare.implantsOrDevices?.join(', ') || 'None reported'}</div>
+        <div class="text-muted">${escapeHtml(chronicCare.implantsOrDevices?.join(', ') || 'Not recorded')}</div>
       </div>
     </section>
 
@@ -432,9 +433,9 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
              <p style="font-size:13px; color:var(--text-muted); margin-top:4px;">
                To view comprehensive multi-year clinical encounters, laboratory observations, and diagnostic reports, a verified attending second clinician must co-sign.
              </p>
-             <button type="button" class="btn btn-cosign" onclick="alert('Co-signing requires second clinician credentials on this terminal.')">
-               ✍️ Request Second Clinician Co-Sign for Full History
-             </button>
+             <a class="btn btn-cosign" href="/clinicians">
+               ✍️ Request Second Clinician Co-Sign for Full History (second clinician signs in on the clinician console)
+             </a>
            </div>`
       }
     </section>
@@ -450,12 +451,4 @@ export function renderEmergencySummaryHtml(data: EmergencySummaryData): string {
 </html>`;
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 

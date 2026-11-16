@@ -32,5 +32,15 @@
     "expectNotIn": "NG-FCT-002" },
   { "id": "T10", "tool": "get_emergency_summary", "desc": "Break-glass without confirmBreakGlass=true is rejected before any Medistry call",
     "args": { "code": "K7QM-4T9X-2HDP-8W2", "reason": "UNCONSCIOUS" },
-    "expectError": true }
+    "expectError": true },
+  { "id": "T11", "kind": "offline_card_flow", "card": "valid",
+    "desc": "Valid offline card: verified card data drives triage, a haematology referral and a handover that says the signature was verified",
+    "expectHandover": ["Source: offline Medistry card v1, signature verified", "Blood group: O+ | Genotype: SS", "Severe allergy: Penicillin", "Sickle cell genotype SS on the card", "## Triage", "## Referral options"],
+    "expectHandoverNot": ["Emeka", "+234", "NOT VERIFIED"],
+    "expectCapability": "haematology" },
+  { "id": "T12", "kind": "offline_card_flow", "card": "tampered",
+    "desc": "Tampered offline card: the card data is refused, the handover says NOT VERIFIED and that the data was not used",
+    "expectHandover": ["Source: offline Medistry card, NOT VERIFIED", "CARD NOT GENUINE", "Card data was not used", "## Triage"],
+    "expectHandoverNot": ["Blood group", "Penicillin", "Genotype: SS", "signature verified"],
+    "expectCapability": "emergency" }
 ]

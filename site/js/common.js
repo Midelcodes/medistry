@@ -36,6 +36,7 @@
     if (options.body !== undefined) headers['Content-Type'] = 'application/json';
     const session = Session.get();
     if (options.auth !== false && session && session.token) headers.Authorization = `Bearer ${session.token}`;
+    if (options.token) headers.Authorization = `Bearer ${options.token}`; // patient or proxy session (patient portal)
     let res;
     try {
       res = await fetch(path, {
@@ -98,6 +99,7 @@
   async function bindClinicianLogin(opts) {
     const select = $(opts.select);
     const totp = $(opts.totp);
+    const password = opts.password ? $(opts.password) : null; // required outside demo mode
     const errorEl = $(opts.error);
     try {
       const { clinicians } = await api('/api/clinicians', { auth: false });
@@ -124,13 +126,16 @@
       const btn = $('button[type="submit"]', e.target);
       btn.disabled = true;
       try {
+        // opts.extraBody lets a page add fields (the scanner adds its device public key to get an offline pass)
+        const extra = opts.extraBody ? await opts.extraBody() : {};
         const data = await api('/api/clinician/login', {
           method: 'POST', auth: false,
-          body: { clinicianId: select.value, totp: totp.value.trim() },
+          body: { clinicianId: select.value, totp: totp.value.trim(), ...(password && password.value ? { password: password.value } : {}), ...extra },
         });
         Session.set({ token: data.token, clinician: data.clinician });
         totp.value = '';
-        opts.onSignedIn(data.clinician);
+        if (password) password.value = '';
+        await opts.onSignedIn(data.clinician, data);
       } catch (err) {
         setError(errorEl, err.message);
       } finally {
@@ -145,7 +150,8 @@
   }
 
   // ---- Timeline rendering (shared) ----
-  function renderTimeline(listEl, items) {
+  // opts.flaggable adds a "Flag as possibly wrong" button per item (patient portal only)
+  function renderTimeline(listEl, items, opts = {}) {
     if (!items.length) {
       listEl.innerHTML = '<li class="empty-note">No records match.</li>';
       return;
@@ -154,7 +160,7 @@
       .map((i) => `<li>
         <div class="tl-head"><span class="tl-title">${esc(i.title)}</span><span class="tl-date">${esc(fmtDate(i.effectiveDate))}</span></div>
         <div class="tl-summary">${esc(i.summary)}</div>
-        <div class="tl-badge"><span class="badge">${esc(i.resourceType)}</span> ${esc(i.badge)}</div>
+        <div class="tl-badge"><span class="badge">${esc(i.resourceType)}</span> ${esc(i.badge)}${opts.flaggable ? ` <button type="button" class="btn-text-link" data-flag="${esc(i.id)}">Flag as possibly wrong</button>` : ''}</div>
       </li>`)
       .join('');
   }

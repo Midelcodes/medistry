@@ -74,7 +74,7 @@ export async function emergencySummary({ code, reason }) {
     grant: { id: grant.grantId, expiresAt: summary.grantMeta.expiresAt, readOnly: true },
     notes: [
       "Break-glass was recorded in the Medistry audit chain and the patient was notified.",
-      "Encounter history is intentionally not returned (not reliable in this build).",
+      "Encounter history is not returned by this tool (data minimisation).",
       "Decision support only. A clinician makes every clinical decision.",
     ],
   };

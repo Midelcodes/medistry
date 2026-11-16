@@ -1,0 +1,50 @@
+    <link rel="stylesheet" href="/css/scan.css">
+    <script type="application/json" id="medistry-jwks">{{jwksJson}}</script>
+    <script type="application/json" id="medistry-scan-i18n">{{scanI18nJson}}</script>
+
+    <section class="scan-page content-container">
+      <div class="scan-top">
+        <h1 class="scan-title" data-i18n="scan_title">Emergency card scanner</h1>
+        <span id="net-status" class="net-pill" role="status" aria-live="polite"></span>
+      </div>
+      <p class="scan-intro" data-i18n="scan_intro">Scan a Medistry emergency card. The signature is checked on this device and nothing is sent to a server.</p>
+
+      <details id="clin-panel" class="clin-panel">
+        <summary><strong data-i18n="scan_pass_title">Clinician pass</strong>: <span id="pass-status"></span> <span id="queue-status" class="queue-status"></span></summary>
+        <p class="clin-note" data-i18n="scan_audit_note">Every scan with a pass is logged and the patient is notified.</p>
+        <p class="clin-note" id="clin-offline" data-i18n="scan_signin_offline" hidden>Connect to the internet to sign in.</p>
+        <form id="clin-form" class="clin-form" autocomplete="off">
+          <label for="clin-select" data-i18n="scan_clinician">Clinician</label>
+          <select id="clin-select"></select>
+          <label for="clin-totp" data-i18n="scan_auth_code">Authenticator code</label>
+          <div class="clin-row">
+            <input id="clin-totp" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
+            <button type="button" class="scan-btn" id="clin-show-code" data-i18n="scan_show_demo_code">Show demo code</button>
+          </div>
+          <button type="submit" class="scan-btn primary" data-i18n="scan_signin_submit">Sign in and get offline pass</button>
+          <p class="scan-msg" id="clin-error" role="alert"></p>
+        </form>
+        <button type="button" class="scan-btn" id="clin-remove" data-i18n="scan_remove_pass" hidden>Remove pass from this device</button>
+      </details>
+
+      <div id="scan-input" class="scan-input">
+        <div class="scan-actions">
+          <button type="button" class="scan-btn primary" id="cam-start" data-i18n="scan_start_camera">Scan with camera</button>
+          <button type="button" class="scan-btn" id="cam-stop" data-i18n="scan_stop_camera" hidden>Stop camera</button>
+        </div>
+        <div class="camera-box" id="camera-box" hidden>
+          <video id="cam-video" playsinline muted aria-label="Camera preview"></video>
+          <p class="scan-hint" data-i18n="scan_aim">Point the camera at the QR code on the front of the card.</p>
+        </div>
+        <p id="scan-msg" class="scan-msg" role="status" aria-live="polite"></p>
+
+        <form id="paste-form" class="paste-form" autocomplete="off">
+          <label for="paste-input" data-i18n="scan_paste_label">Or paste the card link or code</label>
+          <textarea id="paste-input" rows="3" spellcheck="false" autocapitalize="off"></textarea>
+          <button type="submit" class="scan-btn" data-i18n="scan_verify">Verify</button>
+        </form>
+      </div>
+
+      <div id="scan-result" class="scan-result" hidden></div>
+      <noscript><p class="scan-msg">The scanner needs JavaScript to check the card signature.</p></noscript>
+    </section>

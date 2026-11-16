@@ -43,7 +43,10 @@ export interface FHIREncounter {
     individual: FHIRReference; // Clinician
   }>;
   period: FHIRPeriod;
-  reasonCode?: FHIRCodeableConcept[];
+  reasonCode?: FHIRCodeableConcept[];                 // why the patient came (not a diagnosis)
+  diagnosis?: Array<{ condition: FHIRReference; rank?: number }>; // FHIR R4 Encounter.diagnosis (display = diagnosis text)
+  hospitalization?: { dischargeDisposition?: FHIRCodeableConcept }; // FHIR R4: outcome of the visit
+  extension?: Array<{ url: string; valueString?: string }>;         // e.g. treatment summary (see clinical/encounters.ts)
   serviceProvider: FHIRReference; // Facility
 }
 
@@ -201,6 +204,25 @@ export interface FHIRDocumentReference {
       title: string;
     };
   }>;
+}
+
+// ---------------------------------------------------------------------------
+// 7b. DiagnosticReport (laboratory or imaging report; Phase 15 imports)
+// ---------------------------------------------------------------------------
+export interface FHIRDiagnosticReport {
+  resourceType: 'DiagnosticReport';
+  id: string;
+  identifier?: Array<{ system?: string; value: string }>;
+  status: 'registered' | 'partial' | 'preliminary' | 'final' | 'amended' | 'corrected' | 'appended' | 'cancelled' | 'entered-in-error' | 'unknown';
+  category?: FHIRCodeableConcept[];
+  code: FHIRCodeableConcept;
+  subject: FHIRReference;
+  encounter?: FHIRReference;
+  effectiveDateTime?: string;
+  issued?: string;
+  performer?: FHIRReference[];
+  result?: FHIRReference[];
+  conclusion?: string;
 }
 
 // ---------------------------------------------------------------------------
