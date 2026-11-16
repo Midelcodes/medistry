@@ -48,6 +48,30 @@ export const VERY_URGENT_SIGNS = [
   "poisoning_or_overdose", "stab_wound_neck_or_chest", "pregnancy_with_bleeding",
 ];
 
+// Models often word signs loosely ("unresponsive", "SOB"). Map clear synonyms; leave others to fail validation.
+const SIGN_SYNONYMS = [
+  [/UNRESPONSIVE|UNCONSCIOUS|UNROUSABLE|COMA|REDUCED.?LOC|DECREASED.?CONSCIOUS|ALTERED.?CONSCIOUS|CONFUS/, "reduced_consciousness"],
+  [/SHORT.*BREATH|DYSPN|BREATHLESS|RESPIRATORY.?DISTRESS|\bSOB\b/, "shortness_of_breath"],
+  [/CHEST.?PAIN/, "chest_pain"],
+  [/SEIZ|CONVULS|FITTING/, "active_seizure"],
+  [/NOT.?BREATH|APNO?E/, "not_breathing"],
+  [/AIRWAY/, "airway_compromised"],
+  [/CARDIAC.?ARREST|NO.?PULSE|PULSELESS/, "cardiac_arrest"],
+  [/HYPOGLYC|LOW.?(BLOOD.?)?(SUGAR|GLUCOSE)/, "hypoglycaemia"],
+  [/HA?EMOPTYSIS|COUGH.*BLOOD/, "coughing_blood"],
+  [/UNCONTROLLED.?(BLEED|HA?EMORRHAG)|MASSIVE.?(BLEED|HA?EMORRHAG)/, "uncontrolled_haemorrhage"],
+  [/OVERDOSE|POISON/, "poisoning_or_overdose"],
+  [/SEVERE.?PAIN/, "severe_pain"],
+];
+export function normaliseSign(value) {
+  if (typeof value !== "string") return value;
+  const v = value.trim().toLowerCase().replace(/[^a-z]+/g, "_").replace(/^_|_$/g, "");
+  if ([...EMERGENCY_SIGNS, ...VERY_URGENT_SIGNS].includes(v)) return v;
+  const up = value.toUpperCase();
+  for (const [re, sign] of SIGN_SYNONYMS) if (re.test(up)) return sign;
+  return value;
+}
+
 export function triage(input) {
   const { total, parts } = scoreTews(input);
   const signs = input.signs ?? [];

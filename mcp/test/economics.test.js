@@ -81,3 +81,12 @@ test("break-glass reason typos are mapped to the allowed value", () => {
   assert.equal(normaliseReason("UNABLE TO CONSENT"), "PATIENT_UNABLE_TO_CONSENT");
   assert.equal(normaliseReason("BORED"), "BORED");
 });
+
+import { normaliseSign } from "../src/tews.js";
+test("loosely worded signs map to allowed values; unknown stay unknown", () => {
+  assert.equal(normaliseSign("unresponsive"), "reduced_consciousness");
+  assert.equal(normaliseSign("Shortness of breath"), "shortness_of_breath");
+  assert.equal(normaliseSign("chest_pain"), "chest_pain");
+  assert.equal(normaliseSign("minor bleeding"), "minor bleeding");
+  assert.equal(normaliseSign("headache"), "headache");
+});
