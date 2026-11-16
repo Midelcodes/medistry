@@ -67,17 +67,28 @@ function toContents(messages) {
 export function createGeminiProvider({ apiKey, model, client } = {}) {
   if (!model) throw new Error("GEMINI_MODEL is not set.");
   const ai = client ?? new GoogleGenAI({ apiKey });
+  let thinkingUnsupported = false;
   return {
     name: "gemini",
     async generate({ system, messages, tools = [] }) {
-      const res = await ai.models.generateContent({
-        model,
-        contents: toContents(messages),
-        config: {
-          systemInstruction: system,
-          ...(tools.length ? { tools: [{ functionDeclarations: toFunctionDeclarations(tools) }] } : {}),
-        },
-      });
+      const config = {
+        systemInstruction: system,
+        ...(tools.length ? { tools: [{ functionDeclarations: toFunctionDeclarations(tools) }] } : {}),
+      };
+      // Less thinking = faster, cheaper turns for a live demo. GEMINI_THINKING=MINIMAL|LOW|MEDIUM|HIGH,
+      // or "default" to leave it to the model. If the model rejects the setting, retry once without it.
+      const level = (process.env.GEMINI_THINKING || "LOW").toUpperCase();
+      let res;
+      if (level !== "DEFAULT" && !thinkingUnsupported) {
+        try {
+          res = await ai.models.generateContent({ model, contents: toContents(messages), config: { ...config, thinkingConfig: { thinkingLevel: level } } });
+        } catch (e) {
+          if (!/thinking/i.test(String(e?.message))) throw e;
+          thinkingUnsupported = true;
+          console.error(`  (model rejected thinking level ${level}; using its default)`);
+        }
+      }
+      if (!res) res = await ai.models.generateContent({ model, contents: toContents(messages), config });
       const toolCalls = (res.functionCalls ?? []).map((c, i) => ({ id: c.id ?? `call-${i}`, name: c.name, args: c.args ?? {} }));
       const text = toolCalls.length ? null : (res.text ?? null);
       // Measured token use, as reported by the API for this call (thinking tokens are billed as output).

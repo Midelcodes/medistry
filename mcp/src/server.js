@@ -13,6 +13,7 @@ import { triage, detectDeterioration, CATEGORIES, EMERGENCY_SIGNS, VERY_URGENT_S
 import { FACILITIES, LEVEL_RANK, haversineKm } from "./facilities.js";
 import { emergencySummary, postTriageResult } from "./medistry-client.js";
 import { verifyOfflineCard } from "./offline-card.js";
+import { BREAK_GLASS_REASONS, normaliseReason } from "./reasons.js";
 import { startupBanner, withValidationBanner } from "./validation.js";
 
 const obs = {
@@ -130,7 +131,7 @@ server.registerTool("get_emergency_summary", {
   description: "Starts a REAL, audited break-glass session in Medistry for the scanned emergency code and returns a minimised critical-info summary: blood group, genotype, allergies, chronic conditions, current medications, DNR flag and alerts. The patient and their contacts are notified and the access is logged. Use only when the patient cannot consent and treatment is urgent. Requires confirmBreakGlass=true.",
   inputSchema: {
     code: z.string().min(8).describe("Emergency code from the patient's card, wristband or QR (for example K7QM-4T9X-2HDP-8W2)"),
-    reason: z.enum(["UNCONSCIOUS", "LIFE_THREATENING", "PATIENT_UNABLE_TO_CONSENT"]),
+    reason: z.preprocess(normaliseReason, z.enum(BREAK_GLASS_REASONS)),
     confirmBreakGlass: z.literal(true).describe("Must be true. Confirms the clinician accepts that this access is audited and the patient is notified."),
   },
 }, async ({ code, reason }) => {
