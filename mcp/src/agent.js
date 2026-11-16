@@ -9,6 +9,7 @@
 // Nigeria Data Protection Act 2023). Everything sent to the model goes through src/minimise.js first, which
 // strips names, contacts, ids and free-text notes, but minimisation alone is not a lawful basis.
 // Production should use an in-country or self-hosted model behind the same generate() interface.
+import { normaliseReason } from "./reasons.js";
 import { createMinimiser } from "./minimise.js";
 import { validationBanner } from "./validation.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -145,6 +146,10 @@ export async function runAgent({ llm, mcp, task, system = SYSTEM_PROMPT, maxIter
     for (const call of toolCalls) {
       let out;
       let realArgs = minimiser.restore(call.args);
+      if (call.name === "get_emergency_summary" && call.args && typeof call.args === "object") {
+        call.args = { ...call.args, reason: normaliseReason(call.args.reason) };
+        realArgs = { ...realArgs, reason: normaliseReason(realArgs.reason) };
+      }
       const started = Date.now();
       if (call.name === "get_emergency_summary" && !breakGlassAllowed(task, realArgs)) {
         out = { ok: false, result: { error: "Blocked by agent policy: break-glass needs an unconscious patient, an emergency code given in the task, and confirmBreakGlass=true." } };

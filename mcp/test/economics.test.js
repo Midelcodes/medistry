@@ -72,3 +72,12 @@ test("Margin table: hosting per outcome falls with volume; model and SMS stay li
   assert.ok(t.every((r) => Math.abs(r.sms - 0.02) < 1e-12 && r.model === 0.02));
   assert.ok(t.every((r) => r.margin > 0));
 });
+
+import { normaliseReason } from "../src/reasons.js";
+test("break-glass reason typos are mapped to the allowed value", () => {
+  assert.equal(normaliseReason("UNCONCONSCIOUS"), "UNCONSCIOUS");
+  assert.equal(normaliseReason("unconscious patient"), "UNCONSCIOUS");
+  assert.equal(normaliseReason("life threatening"), "LIFE_THREATENING");
+  assert.equal(normaliseReason("UNABLE TO CONSENT"), "PATIENT_UNABLE_TO_CONSENT");
+  assert.equal(normaliseReason("BORED"), "BORED");
+});
