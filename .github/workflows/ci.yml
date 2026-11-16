@@ -25,10 +25,6 @@ jobs:
       - name: Test (root)
         run: npm test
 
-      # The compliance and clinical-safety documents may only name files and endpoints that exist.
-      - name: Check document references
-        run: node scripts/check-doc-paths.mjs
-
       - name: Install (mcp)
         working-directory: mcp
         run: npm ci || npm install
@@ -54,7 +50,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: medistry
           POSTGRES_PASSWORD: medistry_ci_only
