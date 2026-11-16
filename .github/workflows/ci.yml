@@ -25,6 +25,9 @@ jobs:
       - name: Test (root)
         run: npm test
 
+      - name: Check document references
+        run: node scripts/check-doc-paths.mjs
+
       - name: Install (mcp)
         working-directory: mcp
         run: npm ci || npm install
